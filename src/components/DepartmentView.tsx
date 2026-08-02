@@ -1,4 +1,5 @@
 // DepartmentView.tsx – Co‑op facility management with native WebSocket
+// Added: custom room codes, global chat (visible only in co‑op)
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -24,12 +25,12 @@ import { egoGifts } from '../data/egoGifts';
 import { DEPARTMENTS, DepartmentId } from '../data/departments';
 import { abnormalities, getAbnormalityById, type WorkType } from '../data/abnormalities';
 import { getDisplayName } from '../auth/discord';
+import GlobalChat from '../components/GlobalChat';
 
 // ─── Constants ──────────────────────────────────────────────────────────
 const MAX_CLASH_POWER = 50;
 const ULTIMATE_GAIN_MIN = 0.003;
 const ULTIMATE_GAIN_MAX = 0.03;
-// Use environment variable for backend URL (default for production)
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -201,6 +202,12 @@ export default function DepartmentView() {
   const [isForceLeaving, setIsForceLeaving] = useState(false);
   const [selectedIdentityId, setSelectedIdentityId] = useState<string | null>(null);
 
+  // ─── Work progress animation state ────────────────────────────────
+  const [workInProgress, setWorkInProgress] = useState(false);
+  const [workProgress, setWorkProgress] = useState(0);
+  const workTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [pendingWorkType, setPendingWorkType] = useState<WorkType | null>(null);
+
   // ─── Disband confirmation ──────────────────────────────────────────
   const [showDisbandConfirm, setShowDisbandConfirm] = useState(false);
 
@@ -234,6 +241,16 @@ export default function DepartmentView() {
       } catch (e) {}
     }
     setIsHydrated(true);
+  }, []);
+
+  // ─── Clean up work timer ──────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (workTimerRef.current) {
+        clearInterval(workTimerRef.current);
+        workTimerRef.current = null;
+      }
+    };
   }, []);
 
   // ─── Force Leave ──────────────────────────────────────────────────
@@ -302,7 +319,6 @@ export default function DepartmentView() {
 
     ws.onopen = () => {
       console.log('WebSocket connected to department room');
-      // Send join message
       ws.send(JSON.stringify({
         type: 'join',
         playerId: user?.id || crypto.randomUUID(),
@@ -429,17 +445,16 @@ export default function DepartmentView() {
     }
   };
 
-  // ─── Create/Join room ─────────────────────────────────────────────
-  const createDepartmentRoom = (deptId: string) => {
+  // ─── Create/Join room with custom code support ──────────────────
+  const createDepartmentRoom = (deptId: string, customRoomId?: string) => {
     if (!user) {
       alert('Please log in first.');
       return;
     }
-    const roomId = crypto.randomUUID().slice(0, 8);
+    const roomId = customRoomId || crypto.randomUUID().slice(0, 8);
     setRoomId(roomId);
     setIsHost(true);
     setIsCoop(true);
-    // Set facility state
     const result = createFacility(deptId, user.id);
     if (result.success) {
       connectWebSocket(roomId);
@@ -456,7 +471,6 @@ export default function DepartmentView() {
     }
     setRoomId(roomId);
     setIsCoop(true);
-    // We'll join via WebSocket connection
     connectWebSocket(roomId);
     alert(`🔗 Joining room: ${roomId}`);
   };
@@ -469,7 +483,6 @@ export default function DepartmentView() {
     }
 
     sendAction('disbandDepartmentRoom', {});
-    // Reset facility state
     useGameStore.setState((state) => ({
       facility: {
         ...state.facility,
@@ -540,6 +553,71 @@ export default function DepartmentView() {
   const getAvailableAbnos = () => {
     const deployedIds = facility.deployedAbnos.map((a: any) => a.abnoId);
     return abnormalities.filter(ab => !deployedIds.includes(ab.id));
+  };
+
+  // ─── Execute work with animation ──────────────────────────────────
+  const executeWork = (workType: WorkType) => {
+    if (workInProgress) return;
+    if (!selectedAbnoIndex) return;
+    const abno = facility.deployedAbnos[selectedAbnoIndex];
+    if (!abno) return;
+
+    setPendingWorkType(workType);
+    setWorkInProgress(true);
+    setWorkProgress(0);
+
+    const duration = 2000;
+    const interval = 50;
+    const steps = duration / interval;
+    let currentStep = 0;
+
+    if (workTimerRef.current) {
+      clearInterval(workTimerRef.current);
+      workTimerRef.current = null;
+    }
+
+    workTimerRef.current = setInterval(() => {
+      currentStep += 1;
+      const progress = Math.min(100, (currentStep / steps) * 100);
+      setWorkProgress(progress);
+
+      if (progress >= 100) {
+        if (workTimerRef.current) {
+          clearInterval(workTimerRef.current);
+          workTimerRef.current = null;
+        }
+        performWork(workType);
+      }
+    }, interval);
+  };
+
+  const performWork = (workType: WorkType) => {
+    if (!selectedAbnoIndex) {
+      setWorkInProgress(false);
+      setWorkProgress(0);
+      return;
+    }
+    const abno = facility.deployedAbnos[selectedAbnoIndex];
+    if (!abno) {
+      setWorkInProgress(false);
+      setWorkProgress(0);
+      return;
+    }
+
+    const result = workOnAbnormality(abno.abnoId, workType, user?.id || 'guest');
+    setWorkResult(result);
+    addFacilityLog(`${getDisplayName(user)} worked on ${abno.abnoName} (${workType}) - ${result.isSuccess ? 'Success' : 'Failed'}`, result.isSuccess ? 'success' : 'danger');
+    if (isCoop) sendAction('work', { abnoId: abno.abnoId, workType });
+    if (result.breached) alert(`⚠️ ${abno.abnoName} has breached!`);
+    if (result.boostDropped) alert(`🎉 Temperance Boost dropped!`);
+
+    setWorkInProgress(false);
+    setWorkProgress(0);
+    setPendingWorkType(null);
+
+    setTimeout(() => {
+      setWorkResult(null);
+    }, 3000);
   };
 
   // ─── Combat action ──────────────────────────────────────────────────
@@ -714,27 +792,46 @@ export default function DepartmentView() {
           <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
             <h3 className="text-sm font-bold text-cyan-400 mb-2">🌐 Co‑op Lobby</h3>
             <p className="text-sm text-gray-400 mb-4">Create a room or join by code.</p>
-            <div className="flex gap-4 flex-wrap">
-              <button
-                onClick={() => {
-                  const deptId = Object.keys(DEPARTMENTS)[0] as DepartmentId;
-                  createDepartmentRoom(deptId);
-                }}
-                className="px-4 py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
-              >
-                🏠 CREATE ROOM
-              </button>
-              <input
-                type="text"
-                placeholder="Room Code"
-                className="bg-gray-800 border border-gray-700 px-4 py-2 text-white focus:border-cyan-400 outline-none rounded"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const code = (e.target as HTMLInputElement).value.trim();
-                    if (code) joinDepartmentRoom(code);
-                  }
-                }}
-              />
+            <div className="flex flex-col gap-3">
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  placeholder="Room Code (empty = auto-generate)"
+                  className="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 text-white focus:border-cyan-400 outline-none rounded"
+                  id="roomCodeInput"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const input = e.target as HTMLInputElement;
+                      const code = input.value.trim();
+                      if (code) {
+                        joinDepartmentRoom(code);
+                      } else {
+                        const deptId = Object.keys(DEPARTMENTS)[0] as DepartmentId;
+                        createDepartmentRoom(deptId);
+                      }
+                    }
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    const input = document.getElementById('roomCodeInput') as HTMLInputElement;
+                    const code = input.value.trim();
+                    if (code) {
+                      joinDepartmentRoom(code);
+                    } else {
+                      const deptId = Object.keys(DEPARTMENTS)[0] as DepartmentId;
+                      createDepartmentRoom(deptId);
+                    }
+                  }}
+                  className="px-4 py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
+                >
+                  Join / Create
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">If you leave code empty, a random one will be generated.</p>
+              {roomId && (
+                <p className="text-xs text-cyan-400">Room Code: <span className="font-mono font-bold">{roomId}</span></p>
+              )}
             </div>
           </div>
         ) : (
@@ -1217,6 +1314,14 @@ export default function DepartmentView() {
     const canDeploy = deployedToday < maxDeploy;
     const availableAbnos = getAvailableAbnos();
 
+    const getCost = (risk: string) => {
+      if (risk === 'ALEPH') return 50;
+      if (risk === 'WAW') return 30;
+      if (risk === 'HE') return 15;
+      if (risk === 'ZAYIN' || risk === 'TETH') return 0;
+      return 5;
+    };
+
     return (
       <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
         <div className="flex items-center justify-between mb-4">
@@ -1232,11 +1337,10 @@ export default function DepartmentView() {
           <div className="space-y-2 max-h-96 overflow-y-auto">
             {availableAbnos.map(abno => {
               const alreadyDeployed = facility.deployedAbnos.some((a: any) => a.abnoId === abno.id);
-              const cost = abno.risk === 'ALEPH' ? 50
-                : abno.risk === 'WAW' ? 30
-                : abno.risk === 'HE' ? 15
-                : abno.risk === 'ZAYIN' || abno.risk === 'TETH' ? 0
-                : 5;
+              const cost = getCost(abno.risk);
+              const canAfford = facility.energy >= cost;
+              const isFree = cost === 0;
+
               return (
                 <div key={abno.id} className="flex items-center justify-between border border-gray-700 bg-gray-800/50 p-2 rounded">
                   <div>
@@ -1244,12 +1348,16 @@ export default function DepartmentView() {
                     <span className="text-white ml-2">{abno.name}</span>
                     <span className="text-xs text-gray-400 ml-2">{abno.risk}</span>
                     <span className="text-xs text-amber-400 ml-2">
-                      Cost: {cost === 0 ? 'Free' : `${cost}⚡`}
+                      Cost: {isFree ? 'Free' : `${cost}⚡`}
                     </span>
                   </div>
                   <button
                     onClick={() => {
                       if (alreadyDeployed) return;
+                      if (!isFree && !canAfford) {
+                        alert(`❌ Not enough energy (need ${cost})`);
+                        return;
+                      }
                       const result = deployAbnormality(abno.id, user?.id || 'guest');
                       if (result.success) {
                         alert(`✅ ${result.abnormality} deployed!`);
@@ -1260,8 +1368,12 @@ export default function DepartmentView() {
                         alert(`❌ ${result.reason}`);
                       }
                     }}
-                    disabled={alreadyDeployed}
-                    className={`px-3 py-1 rounded text-sm ${alreadyDeployed ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-cyan-500/20 border border-cyan-400 text-cyan-400 hover:bg-cyan-400 hover:text-gray-900 transition'}`}
+                    disabled={alreadyDeployed || (!isFree && !canAfford)}
+                    className={`px-3 py-1 rounded text-sm ${
+                      alreadyDeployed ? 'bg-gray-700 text-gray-500 cursor-not-allowed' :
+                      isFree ? 'bg-green-500/20 border border-green-400 text-green-400 hover:bg-green-400 hover:text-gray-900 transition' :
+                      'bg-cyan-500/20 border border-cyan-400 text-cyan-400 hover:bg-cyan-400 hover:text-gray-900 transition'
+                    }`}
                   >
                     {alreadyDeployed ? 'Deployed' : 'Deploy'}
                   </button>
@@ -1274,7 +1386,7 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Work (local action) ──────────────────────────────────
+  // ─── Render: Work (Lobotomy Corp style) ──────────────────────────
   const renderWork = () => {
     if (!selectedIdentityId) {
       return (
@@ -1337,54 +1449,137 @@ export default function DepartmentView() {
       repression: Math.min(1, baseChances.repression * agentStats.workSuccess),
     };
 
+    const identity = identities.find(i => i.id === selectedIdentityId);
+    const identityPortrait = identity?.portrait || '👤';
+
     return (
-      <div className="border border-gray-700 rounded p-4">
+      <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold text-green-400">
             🔨 Work on {getRiskEmoji(selectedAbno.risk)} {selectedAbno.abnoName}
           </h3>
           <button onClick={() => setSelectedAbnoIndex(null)} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
-        <p className="text-xs text-gray-400 mb-2">Work success multiplier: {Math.round(agentStats.workSuccess * 100)}%</p>
+
+        <div className="grid grid-cols-2 gap-3 mb-4 p-3 bg-gray-700/20 rounded">
+          <div className="text-center">
+            <p className="text-xs text-gray-400">Abnormality</p>
+            <p className="text-xl font-bold text-white">{selectedAbno.abnoName}</p>
+            <p className="text-sm text-gray-400">Risk: {selectedAbno.risk}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs text-gray-400">Agent</p>
+            <p className="text-xl font-bold text-cyan-400">{identity?.name || 'Agent'}</p>
+            <p className="text-sm text-gray-400">Work Bonus: +{Math.round((agentStats.workSuccess - 1) * 100)}%</p>
+          </div>
+        </div>
+
+        <div className="mb-4 flex items-center justify-between p-2 bg-gray-800/30 rounded">
+          <span className="text-sm text-gray-400">Qliphoth Counter</span>
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-32 bg-gray-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-amber-400 transition-all duration-300"
+                style={{ width: `${(selectedAbno.qliphothCounter / selectedAbno.maxCounter) * 100}%` }}
+              />
+            </div>
+            <span className="text-white font-mono">{selectedAbno.qliphothCounter}/{selectedAbno.maxCounter}</span>
+          </div>
+        </div>
+
+        {workInProgress && (
+          <div className="mb-4 p-4 border-2 border-cyan-500/50 bg-cyan-500/10 rounded-lg shadow-lg animate-pulse">
+            <div className="flex items-center gap-4 mb-2">
+              <div className="text-4xl">{getRiskEmoji(selectedAbno.risk)}</div>
+              <div className="flex-1">
+                <div className="flex justify-between text-sm text-cyan-400 font-bold">
+                  <span>WORKING ON {selectedAbno.abnoName.toUpperCase()}...</span>
+                  <span>{Math.round(workProgress)}%</span>
+                </div>
+                <div className="w-full h-4 bg-gray-700 rounded-full overflow-hidden border border-cyan-500/30">
+                  <div
+                    className="h-full bg-gradient-to-r from-cyan-400 via-blue-400 to-green-400 transition-all duration-100 rounded-full"
+                    style={{ width: `${workProgress}%` }}
+                  />
+                </div>
+              </div>
+              <div className="text-3xl">{identityPortrait}</div>
+            </div>
+            <div className="text-center text-xs text-cyan-300 font-mono">
+              ⏳ {pendingWorkType?.toUpperCase()} in progress... Agent is working.
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           {(['instinct', 'insight', 'attachment', 'repression'] as WorkType[]).map(type => {
             const chance = modifiedChances[type];
+            const isDisabled = workInProgress;
             return (
               <button
                 key={type}
                 onClick={() => {
-                  const result = workOnAbnormality(selectedAbno.abnoId, type, user?.id || 'guest');
-                  setWorkResult(result);
-                  addFacilityLog(`${getDisplayName(user)} worked on ${selectedAbno.abnoName} (${type}) - ${result.isSuccess ? 'Success' : 'Failed'}`, result.isSuccess ? 'success' : 'danger');
-                  if (isCoop) sendAction('work', { abnoId: selectedAbno.abnoId, workType: type });
-                  if (result.breached) alert(`⚠️ ${selectedAbno.abnoName} has breached!`);
-                  if (result.boostDropped) alert(`🎉 Temperance Boost dropped!`);
-                  setTimeout(() => setWorkResult(null), 3000);
+                  if (isDisabled) return;
+                  executeWork(type);
                 }}
-                className="p-3 border border-gray-700 bg-gray-800/30 rounded hover:border-cyan-400 hover:bg-cyan-400/10 transition capitalize"
+                disabled={isDisabled}
+                className={`p-3 border rounded transition capitalize text-sm ${
+                  isDisabled
+                    ? 'border-gray-600 bg-gray-700/50 text-gray-400 cursor-not-allowed'
+                    : 'border-gray-700 bg-gray-800/30 hover:border-cyan-400 hover:bg-cyan-400/10'
+                }`}
               >
-                {type} ({Math.round(chance * 100)}%)
+                <div className="font-bold">{type}</div>
+                <div className="text-xs text-gray-400">{Math.round(chance * 100)}% success</div>
+                {isDisabled && workInProgress && (
+                  <div className="text-[10px] text-cyan-400 animate-pulse">⏳ Working...</div>
+                )}
               </button>
             );
           })}
         </div>
+
         {workResult && (
-          <div className={`mt-4 p-3 border rounded ${workResult.isSuccess ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
-            <p className={`font-bold ${workResult.isSuccess ? 'text-green-400' : 'text-red-400'}`}>
-              {workResult.isSuccess ? '✅ Success!' : '❌ Failed!'}
-            </p>
-            <p className="text-sm text-gray-300">Energy +{workResult.energyGain}</p>
-            {workResult.peBoxes > 0 && <p className="text-sm text-gray-300">PE Boxes +{workResult.peBoxes}</p>}
-            {workResult.breached && <p className="text-sm text-red-400">⚠️ Breach triggered!</p>}
-            {workResult.boostDropped && <p className="text-sm text-green-400">📈 Temperance Boost dropped!</p>}
+          <div className={`mt-4 p-4 border-2 rounded-lg shadow-lg transition-all duration-500 ${
+            workResult.isSuccess
+              ? 'border-green-500/50 bg-green-500/10 scale-100'
+              : 'border-red-500/50 bg-red-500/10 scale-100'
+          }`}>
+            <div className="flex items-center gap-4">
+              <span className="text-4xl">{workResult.isSuccess ? '✅' : '❌'}</span>
+              <div className="flex-1">
+                <p className={`text-xl font-bold ${workResult.isSuccess ? 'text-green-400' : 'text-red-400'}`}>
+                  {workResult.isSuccess ? 'GOOD' : 'BAD'} WORK RESULT
+                </p>
+                <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
+                  <div>
+                    <span className="text-gray-400">Energy:</span>
+                    <span className="text-cyan-400 ml-1">+{workResult.energyGain}</span>
+                  </div>
+                  {workResult.peBoxes > 0 && (
+                    <div>
+                      <span className="text-gray-400">PE Boxes:</span>
+                      <span className="text-amber-400 ml-1">+{workResult.peBoxes}</span>
+                    </div>
+                  )}
+                </div>
+                {workResult.breached && (
+                  <p className="text-red-400 text-sm animate-pulse mt-1">⚠️ BREACH TRIGGERED!</p>
+                )}
+                {workResult.boostDropped && (
+                  <p className="text-green-400 text-sm mt-1">📈 Temperance Boost dropped!</p>
+                )}
+              </div>
+            </div>
           </div>
         )}
+
         <button onClick={() => setView('dashboard')} className="mt-4 text-sm text-gray-400 hover:text-white">← Back</button>
       </div>
     );
   };
 
-  // ─── Render: Research (local action) ─────────────────────────────
+  // ─── Render: Research ─────────────────────────────────────────────
   const renderResearch = () => {
     const deptKey = facility.departmentKey;
     const dept = DEPARTMENTS[deptKey as DepartmentId];
@@ -1716,6 +1911,7 @@ export default function DepartmentView() {
           {view === 'memory' && renderMemory()}
         </>
       )}
+      {isCoop && <GlobalChat />}
     </div>
   );
 }
