@@ -1,5 +1,5 @@
 // ReceptionMode.tsx – 1v1 Duel with WebSocket
-// Added: global chat (visible only during combat/result), custom WebSocket integration, fixed "Find Match" button.
+// Now with Global Chat (visible only during combat or result)
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -1241,5 +1241,15 @@ export default function ReceptionMode({
     );
   }
 
-  return null;
+  // ─── Main Render ────────────────────────────────────────────────────
+  return (
+    <div className="min-h-screen bg-[#070a14] text-white font-sans p-4">
+      <div className="max-w-4xl mx-auto space-y-4">
+        {/* The entire content (lobby/combat/result) is rendered above */}
+        {/* We need to render the chat after the content but still inside the outer div */}
+      </div>
+      {/* ─── GLOBAL CHAT ─── */}
+      {(phase === 'combat' || phase === 'result') && <GlobalChat />}
+    </div>
+  );
 }
