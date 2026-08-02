@@ -1,0 +1,18 @@
+{
+  "name": "qliphoth-backend",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "qliphoth-db",
+      "database_id": "f3c81138-4c36-4d85-97af-00d127a2f677"
+    }
+  ],
+
+  "vars": {
+    "ALLOWED_ORIGIN": "https://qliphoth.pages.dev"
+  }
+}
