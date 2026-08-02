@@ -1,4 +1,5 @@
-// src/store/gameStore.ts – Full file with duel score 0, auto-equip, core passive, defense
+export default useGameStore;// src/store/gameStore.ts – Full file with duel score 0, auto-equip, core passive, defense
+// FIX: deployAbnormality now uses actual abnormality data and correct deploy cost.
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { identities, storyOnlyIdentities, getClassCategories, type Identity } from '../data/identities';
@@ -8,6 +9,8 @@ import { storyChapters } from '../data/story';
 import { CR_REGIONS, SQUAD_INFO, getCurrentWeek, getWeeklyZones, type CRRegion, type Squad, type ZoneElement } from '../data/competitive';
 import { expForLevel } from '../data/identities';
 import { getFirstTutorialStep, getTabTutorialSteps } from '../data/tutorial';
+// ─── ADDED: import abnormalities for deployAbnormality ───
+import { abnormalities } from '../data/abnormalities';
 
 // ── STORE VERSION ──────────────────────────────────────────────────────
 const STORE_VERSION = 25;
@@ -785,7 +788,7 @@ const INITIAL_STATE: GameState = {
   },
   duel: {
     active: false,
-    score: 0,           // <-- changed from 1000 to 0
+    score: 0,
     lives: 5,
     streak: 0,
     history: [],
@@ -2023,7 +2026,10 @@ const useGameStore = create<GameState>()(
       removeEgoManifestEssence: (amount: number) =>
         set((state) => ({ egoManifestEssence: Math.max(0, state.egoManifestEssence - amount) })),
 
-      // ── Department / Facility ──────────────────────────────────────────
+      // ────────────────────────────────────────────────────────────────────
+      // ─── DEPARTMENT / FACILITY ACTIONS ────────────────────────────────
+      // ────────────────────────────────────────────────────────────────────
+
       createFacility: (departmentKey: string, userId: string, name?: string) => {
         const normalizedKey = departmentKey.toUpperCase();
         const deptConfig = DEPARTMENTS.find(d => d.key === normalizedKey);
@@ -2076,6 +2082,7 @@ const useGameStore = create<GameState>()(
         return { success: true };
       },
 
+      // ─── FIXED: deployAbnormality now uses actual abnormality data ────
       deployAbnormality: (abnoId: string, userId: string) => {
         const state = get();
         if (!state.facility.isActive) return { success: false, reason: 'No active facility' };
@@ -2086,15 +2093,17 @@ const useGameStore = create<GameState>()(
         if (state.facility.deployedToday.length >= maxPerDay) {
           return { success: false, reason: `Already deployed ${maxPerDay} abnormality today` };
         }
-        const abno = { id: abnoId, name: `Abnormality ${abnoId}`, risk: 'HE' };
-        const deployCost = getDeployCost(state.facility.currentDay, abno.risk);
+        // ─── Get actual abnormality data ───
+        const abnoData = abnormalities.find(a => a.id === abnoId);
+        if (!abnoData) return { success: false, reason: 'Abnormality not found' };
+        const deployCost = getDeployCost(state.facility.currentDay, abnoData.risk);
         if (state.facility.energy < deployCost) {
           return { success: false, reason: `Not enough energy (need ${deployCost})` };
         }
         const newAbno = {
-          abnoId: abno.id,
-          abnoName: abno.name,
-          risk: abno.risk,
+          abnoId: abnoData.id,
+          abnoName: abnoData.name,
+          risk: abnoData.risk,
           qliphothCounter: 3,
           maxCounter: 3,
           workCount: 0,
@@ -2105,10 +2114,10 @@ const useGameStore = create<GameState>()(
             ...s.facility,
             energy: s.facility.energy - deployCost,
             deployedAbnos: [...s.facility.deployedAbnos, newAbno],
-            deployedToday: [...s.facility.deployedToday, abno.id],
+            deployedToday: [...s.facility.deployedToday, abnoId],
           },
         }));
-        return { success: true, abnormality: abno.name, deployCost };
+        return { success: true, abnormality: abnoData.name, deployCost };
       },
 
       workOnAbnormality: (abnoId: string, workType: 'instinct' | 'insight' | 'attachment' | 'repression', userId: string) => {
@@ -2501,23 +2510,23 @@ const useGameStore = create<GameState>()(
           ];
         }
 
-        // ─── Rename eclipse_blade → excalibur_greatsword ──────────────
+        // ─── Rename excalibur_greatsword → excalibur_greatsword ──────────────
         if (version < 25) {
           if (Array.isArray(newState.ownedWeapons)) {
             newState.ownedWeapons = newState.ownedWeapons.map((w: any) => ({
               ...w,
-              weaponId: w.weaponId === 'eclipse_blade' ? 'excalibur_greatsword' : w.weaponId,
+              weaponId: w.weaponId === 'excalibur_greatsword' ? 'excalibur_greatsword' : w.weaponId,
             }));
           }
           if (Array.isArray(newState.ownedIdentities)) {
             newState.ownedIdentities = newState.ownedIdentities.map((o: any) => ({
               ...o,
-              equippedWeaponId: o.equippedWeaponId === 'eclipse_blade' ? 'excalibur_greatsword' : o.equippedWeaponId,
+              equippedWeaponId: o.equippedWeaponId === 'excalibur_greatsword' ? 'excalibur_greatsword' : o.equippedWeaponId,
             }));
           }
           if (newState.banners) {
             for (const key of ['weapon', 'rerun_weapon']) {
-              if (newState.banners[key] && newState.banners[key].selectedWeaponId === 'eclipse_blade') {
+              if (newState.banners[key] && newState.banners[key].selectedWeaponId === 'excalibur_greatsword') {
                 newState.banners[key].selectedWeaponId = 'excalibur_greatsword';
               }
             }
@@ -2608,7 +2617,7 @@ const useGameStore = create<GameState>()(
           if (o.identityId === 'arthur_excalibur') {
             return { ...o, equippedWeaponId: 'excalibur_greatsword' };
           }
-          if (o.equippedWeaponId === 'eclipse_blade') {
+          if (o.equippedWeaponId === 'excalibur_greatsword') {
             return { ...o, equippedWeaponId: 'excalibur_greatsword' };
           }
           return o;
@@ -2617,7 +2626,7 @@ const useGameStore = create<GameState>()(
         // ─── Fix any old weapon ID in ownedWeapons ─────────────────────
         state.ownedWeapons = state.ownedWeapons.map((w: any) => ({
           ...w,
-          weaponId: w.weaponId === 'eclipse_blade' ? 'excalibur_greatsword' : w.weaponId,
+          weaponId: w.weaponId === 'excalibur_greatsword' ? 'excalibur_greatsword' : w.weaponId,
         }));
 
         // ─── Fix valid identities ──────────────────────────────────────
@@ -2919,5 +2928,3 @@ function pullOne(banner: BannerState, bannerType: BannerType): GachaResult {
     return { type: 'material', rarity: 'material', id: picked.id, name: picked.name };
   }
 }
-
-export default useGameStore;
