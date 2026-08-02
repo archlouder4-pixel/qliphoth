@@ -3,6 +3,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
   "compatibility_flags": ["nodejs_compat"],
+
   "d1_databases": [
     {
       "binding": "DB",
@@ -10,9 +11,11 @@
       "database_id": "f3c81138-4c36-4d85-97af-00d127a2f677"
     }
   ],
+
   "vars": {
     "ALLOWED_ORIGIN": "https://qliphoth.pages.dev"
   },
+
   "durable_objects": {
     "bindings": [
       { "name": "DEPARTMENT_ROOM", "class_name": "DepartmentRoom" },
@@ -22,6 +25,7 @@
       { "name": "GLOBAL_CHAT", "class_name": "GlobalChat" }
     ]
   },
+
   "migrations": [
     {
       "tag": "v1",
@@ -29,7 +33,12 @@
         "DepartmentRoom",
         "ReceptionRoom",
         "CompetitiveRoom",
-        "ExplorationRoom",
+        "ExplorationRoom"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
         "GlobalChat"
       ]
     }
