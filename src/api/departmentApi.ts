@@ -1,5 +1,5 @@
-// src/api/departmentApi.ts
-import { API_BASE } from './competitiveApi';
+// src/api/departmentApi.ts – rewritten for Durable Objects backend
+import { BASE_URL } from './competitiveApi';
 
 export interface Department {
   id: string;
@@ -14,38 +14,46 @@ export interface Department {
   research: any[];
 }
 
-export async function createDepartment(name: string): Promise<{ ok: true; department: Department }> {
-  const res = await fetch(`${API_BASE}/api/department/create`, {
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error('Failed to create department');
-  return res.json();
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((data && data.error) || `Request failed: ${res.status}`);
+  }
+  return data as T;
 }
 
-export async function joinDepartment(departmentId: string): Promise<{ ok: true }> {
-  const res = await fetch(`${API_BASE}/api/department/join`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ departmentId }),
-  });
-  if (!res.ok) throw new Error('Failed to join department');
-  return res.json();
+async function getJson<T>(path: string, params: Record<string, string>): Promise<T> {
+  const url = new URL(`${BASE_URL}${path}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url.toString());
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((data && data.error) || `Request failed: ${res.status}`);
+  }
+  return data as T;
 }
 
-export async function getDepartmentStatus(): Promise<{ ok: true; department: Department }> {
-  const res = await fetch(`${API_BASE}/api/department/status`);
-  if (!res.ok) throw new Error('Failed to fetch department status');
-  return res.json();
+export function createDepartment(name: string): Promise<{ ok: true; department: Department }> {
+  return postJson('/api/department/create', { name });
 }
 
-export async function workOnAbnormality(abnoId: string, workType: string): Promise<{ ok: true; result: any }> {
-  const res = await fetch(`${API_BASE}/api/department/work`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ abnoId, workType }),
-  });
-  if (!res.ok) throw new Error('Failed to work on abnormality');
-  return res.json();
+export function joinDepartment(departmentId: string): Promise<{ ok: true }> {
+  return postJson('/api/department/join', { departmentId });
+}
+
+export function getDepartmentStatus(departmentId?: string): Promise<{ ok: true; department: Department }> {
+  return getJson('/api/department/status', departmentId ? { departmentId } : {});
+}
+
+export function workOnAbnormality(abnoId: string, workType: string): Promise<{ ok: true; result: any }> {
+  return postJson('/api/department/work', { abnoId, workType });
+}
+
+export function advanceDay(departmentId: string): Promise<{ ok: true; newDay: number; energy: number }> {
+  return postJson('/api/department/advance', { departmentId });
 }

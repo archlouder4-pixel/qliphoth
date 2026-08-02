@@ -1,5 +1,5 @@
-// src/api/explorationApi.ts
-import { API_BASE } from './competitiveApi';
+// src/api/explorationApi.ts – rewritten for Durable Objects backend
+import { BASE_URL } from './competitiveApi'; // reuse the base URL
 
 export interface ExplorationSession {
   id: string;
@@ -14,28 +14,42 @@ export interface ExplorationSession {
   score: number;
 }
 
-export async function startExploration(difficulty: string, modifiers: string[]): Promise<{ ok: true; session: ExplorationSession }> {
-  const res = await fetch(`${API_BASE}/api/exploration/start`, {
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ difficulty, modifiers }),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error('Failed to start exploration');
-  return res.json();
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((data && data.error) || `Request failed: ${res.status}`);
+  }
+  return data as T;
 }
 
-export async function joinExploration(sessionId: string): Promise<{ ok: true }> {
-  const res = await fetch(`${API_BASE}/api/exploration/join`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId }),
-  });
-  if (!res.ok) throw new Error('Failed to join exploration');
-  return res.json();
+async function getJson<T>(path: string, params: Record<string, string>): Promise<T> {
+  const url = new URL(`${BASE_URL}${path}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url.toString());
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((data && data.error) || `Request failed: ${res.status}`);
+  }
+  return data as T;
 }
 
-export async function getExplorationStatus(sessionId: string): Promise<{ ok: true; session: ExplorationSession }> {
-  const res = await fetch(`${API_BASE}/api/exploration/status?sessionId=${sessionId}`);
-  if (!res.ok) throw new Error('Failed to fetch exploration status');
-  return res.json();
+export function startExploration(difficulty: string, modifiers: string[]): Promise<{ ok: true; session: ExplorationSession }> {
+  return postJson('/api/exploration/start', { difficulty, modifiers });
+}
+
+export function joinExploration(sessionId: string): Promise<{ ok: true }> {
+  return postJson('/api/exploration/join', { sessionId });
+}
+
+export function getExplorationStatus(sessionId: string): Promise<{ ok: true; session: ExplorationSession }> {
+  return getJson('/api/exploration/status', { sessionId });
+}
+
+export function abandonExploration(sessionId: string): Promise<{ ok: true }> {
+  return postJson('/api/exploration/abandon', { sessionId });
 }

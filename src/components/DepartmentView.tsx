@@ -1,8 +1,7 @@
-// DepartmentView.tsx – Co‑op facility management with auto‑disband for last manager standing
+// DepartmentView.tsx – Co‑op facility management with native WebSocket
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
-import io from 'socket.io-client';
 import {
   identities,
   scaledStats,
@@ -30,7 +29,8 @@ import { getDisplayName } from '../auth/discord';
 const MAX_CLASH_POWER = 50;
 const ULTIMATE_GAIN_MIN = 0.003;
 const ULTIMATE_GAIN_MAX = 0.03;
-const SERVER_URL = process.env.REACT_APP_SERVER_URL || 'http://localhost:3001';
+// Use environment variable for backend URL (default for production)
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 function getRiskEmoji(risk: string): string {
@@ -182,8 +182,9 @@ export default function DepartmentView() {
     equippedGifts,
   } = useGameStore();
 
-  // ─── Socket ref ───────────────────────────────────────────────────
-  const socketRef = useRef<any>(null);
+  // ─── WebSocket ref ───────────────────────────────────────────────────
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
 
   // ─── Co‑op state ──────────────────────────────────────────────────
   const [isCoop, setIsCoop] = useState(false);
@@ -292,132 +293,182 @@ export default function DepartmentView() {
     }
   };
 
-  // ─── Co‑op Socket Setup ────────────────────────────────────────────
-  const setupSocketListeners = (socket: any) => {
-    socket.on('departmentRoomCreated', ({ roomId, facility: fac, players: pList }) => {
-      setRoomId(roomId);
-      setPlayers(pList);
-      setIsHost(true);
-      setIsCoop(true);
-      useGameStore.setState({ facility: fac });
-      alert(`🏢 Department room created. Players: ${pList.map((p: any) => p.name).join(', ')}`);
-    });
+  // ─── WebSocket connection helpers ──────────────────────────────────
+  const connectWebSocket = (roomId: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+    const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
+    const ws = new WebSocket(`wss://${wsUrl}/room/department/${roomId}`);
+    wsRef.current = ws;
 
-    socket.on('departmentRoomJoined', ({ roomId, players: pList, facility: fac }) => {
-      setRoomId(roomId);
-      setPlayers(pList);
-      setIsCoop(true);
-      useGameStore.setState({ facility: fac });
-      alert(`🏢 Joined department room. Players: ${pList.map((p: any) => p.name).join(', ')}`);
-    });
-
-    socket.on('departmentStateUpdate', (state: any) => {
-      useGameStore.setState({ facility: state.facility });
-      setPlayers(state.players || []);
-      if (state.combat) {
-        setCombatEnemy(state.combat.enemy);
-        setCombatPlayer(state.combat.player);
-        setPlayerHp(state.combat.playerHp);
-        setPlayerMaxHp(state.combat.playerMaxHp);
-        setEnemyHp(state.combat.enemyHp);
-        setEnemyMaxHp(state.combat.enemyMaxHp);
-        setCombatTurn(state.combat.turn);
-        setClashData(state.combat.clashData || null);
-        setCombatLog(state.combat.log || []);
-        setIsCombatFinished(state.combat.isFinished);
-        setCombatInitiator(state.combat.initiator);
-        setView('combat');
-      } else {
-        setView('dashboard');
-      }
-    });
-
-    socket.on('departmentRoomDisbanded', () => {
-      // Reset facility state
-      useGameStore.setState((state) => ({
-        facility: {
-          ...state.facility,
-          isActive: false,
-          members: [],
-          deployedAbnos: [],
-          deployedToday: [],
-          log: [],
-        },
+    ws.onopen = () => {
+      console.log('WebSocket connected to department room');
+      // Send join message
+      ws.send(JSON.stringify({
+        type: 'join',
+        playerId: user?.id || crypto.randomUUID(),
+        playerName: getDisplayName(user),
+        identityId: selectedIdentityId,
       }));
-      setIsCoop(false);
-      setRoomId(null);
-      setPlayers([]);
-      setIsHost(false);
-      setView('dashboard');
-      alert('The room has been disbanded by the host.');
-    });
+    };
 
-    socket.on('departmentCombatAction', (data: any) => {
-      setPlayerHp(data.playerHp);
-      setEnemyHp(data.enemyHp);
-      setClashData(data.clashData || null);
-      setCombatTurn(data.turn);
-      if (data.log) setCombatLog(prev => [...prev.slice(-20), data.log]);
-    });
-
-    socket.on('departmentCombatFinished', (result: any) => {
-      setIsCombatFinished(true);
-      setView('dashboard');
-      if (result.won) {
-        suppressBreach(result.abnoId, true);
-        addFacilityLog(`${result.initiator} suppressed ${result.enemyName}!`, 'success');
-      } else {
-        addFacilityLog(`${result.initiator} failed to suppress ${result.enemyName}.`, 'danger');
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+      } catch (err) {
+        console.error('Failed to parse WebSocket message:', err);
       }
-    });
+    };
 
-    socket.on('departmentError', (msg: string) => alert(`❌ ${msg}`));
+    ws.onclose = () => {
+      console.log('WebSocket closed, reconnecting...');
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = setTimeout(() => {
+        if (roomId) connectWebSocket(roomId);
+      }, 3000);
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
   };
 
-  const createDepartmentRoom = (deptId: string) => {
-    if (!socketRef.current) {
-      const newSocket = io(SERVER_URL);
-      socketRef.current = newSocket;
-      setupSocketListeners(newSocket);
+  const disconnectWebSocket = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
     }
-    socketRef.current.emit('createDepartmentRoom', {
-      deptId,
-      playerName: getDisplayName(user),
-      facility: useGameStore.getState().facility,
-    });
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  };
+
+  // ─── Handle incoming WebSocket messages ──────────────────────────
+  const handleWebSocketMessage = (data: any) => {
+    switch (data.type) {
+      case 'stateUpdate':
+        useGameStore.setState({ facility: data.facility });
+        setPlayers(data.players || []);
+        if (data.combat) {
+          setCombatEnemy(data.combat.enemy);
+          setCombatPlayer(data.combat.player);
+          setPlayerHp(data.combat.playerHp);
+          setPlayerMaxHp(data.combat.playerMaxHp);
+          setEnemyHp(data.combat.enemyHp);
+          setEnemyMaxHp(data.combat.enemyMaxHp);
+          setCombatTurn(data.combat.turn);
+          setClashData(data.combat.clashData || null);
+          setCombatLog(data.combat.log || []);
+          setIsCombatFinished(data.combat.isFinished);
+          setCombatInitiator(data.combat.initiator);
+          setView('combat');
+        } else {
+          setView('dashboard');
+        }
+        break;
+
+      case 'departmentRoomDisbanded':
+        useGameStore.setState((state) => ({
+          facility: {
+            ...state.facility,
+            isActive: false,
+            members: [],
+            deployedAbnos: [],
+            deployedToday: [],
+            log: [],
+          },
+        }));
+        setIsCoop(false);
+        setRoomId(null);
+        setPlayers([]);
+        setIsHost(false);
+        setView('dashboard');
+        alert('The room has been disbanded by the host.');
+        disconnectWebSocket();
+        break;
+
+      case 'departmentCombatAction':
+        setPlayerHp(data.playerHp);
+        setEnemyHp(data.enemyHp);
+        setClashData(data.clashData || null);
+        setCombatTurn(data.turn);
+        if (data.log) setCombatLog(prev => [...prev.slice(-20), data.log]);
+        break;
+
+      case 'departmentCombatFinished':
+        setIsCombatFinished(true);
+        setView('dashboard');
+        if (data.won) {
+          suppressBreach(data.abnoId, true);
+          addFacilityLog(`${data.initiator} suppressed ${data.enemyName}!`, 'success');
+        } else {
+          addFacilityLog(`${data.initiator} failed to suppress ${data.enemyName}.`, 'danger');
+        }
+        break;
+
+      case 'error':
+        alert(`❌ ${data.message}`);
+        break;
+
+      case 'welcome':
+        console.log('Welcome from server:', data.message);
+        break;
+
+      default:
+        console.log('Unhandled WebSocket message:', data);
+    }
+  };
+
+  // ─── Send action via WebSocket ──────────────────────────────────
+  const sendAction = (type: string, payload?: any) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type, payload }));
+    } else {
+      alert('WebSocket is not connected. Please try again.');
+    }
+  };
+
+  // ─── Create/Join room ─────────────────────────────────────────────
+  const createDepartmentRoom = (deptId: string) => {
+    if (!user) {
+      alert('Please log in first.');
+      return;
+    }
+    const roomId = crypto.randomUUID().slice(0, 8);
+    setRoomId(roomId);
+    setIsHost(true);
+    setIsCoop(true);
+    // Set facility state
+    const result = createFacility(deptId, user.id);
+    if (result.success) {
+      connectWebSocket(roomId);
+      alert(`🏢 Room created: ${roomId}`);
+    } else {
+      alert(`❌ ${result.reason}`);
+    }
   };
 
   const joinDepartmentRoom = (roomId: string) => {
-    if (!socketRef.current) {
-      const newSocket = io(SERVER_URL);
-      socketRef.current = newSocket;
-      setupSocketListeners(newSocket);
+    if (!user) {
+      alert('Please log in first.');
+      return;
     }
-    socketRef.current.emit('joinDepartmentRoom', {
-      roomId,
-      playerName: getDisplayName(user),
-    });
-  };
-
-  const sendDepartmentAction = (action: string, payload: any) => {
-    if (socketRef.current && isCoop) {
-      socketRef.current.emit('departmentAction', { roomId, action, payload, playerId: user?.id });
-    }
+    setRoomId(roomId);
+    setIsCoop(true);
+    // We'll join via WebSocket connection
+    connectWebSocket(roomId);
+    alert(`🔗 Joining room: ${roomId}`);
   };
 
   // ─── Disband room ──────────────────────────────────────────────────
   const disbandRoom = () => {
-    // Check if current user is the manager
     if (facility.managerId !== user?.id) {
       alert('Only the manager can disband the facility.');
       return;
     }
 
-    // If in co‑op, notify other players
-    if (isCoop && socketRef.current) {
-      socketRef.current.emit('disbandDepartmentRoom', { roomId });
-    }
-
+    sendAction('disbandDepartmentRoom', {});
     // Reset facility state
     useGameStore.setState((state) => ({
       facility: {
@@ -438,21 +489,13 @@ export default function DepartmentView() {
         log: [],
       },
     }));
-
-    // Reset local co‑op state
     setIsCoop(false);
     setRoomId(null);
     setPlayers([]);
     setIsHost(false);
     setView('dashboard');
     setShowDisbandConfirm(false);
-
-    // Disconnect socket
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
-    }
-
+    disconnectWebSocket();
     alert('🏢 Facility disbanded.');
   };
 
@@ -470,13 +513,8 @@ export default function DepartmentView() {
         log: [entry, ...(state.facility.log || [])].slice(0, 50),
       },
     }));
-    if (isCoop && socketRef.current) {
-      socketRef.current.emit('departmentAction', {
-        roomId,
-        action: 'addLog',
-        payload: entry,
-        playerId: user?.id,
-      });
+    if (isCoop && wsRef.current) {
+      sendAction('addLog', entry);
     }
   };
 
@@ -538,7 +576,7 @@ export default function DepartmentView() {
       const logMsg = `✅ ${player.name} dealt ${dmg} damage to ${enemy.name}!`;
       setCombatLog(prev => [...prev.slice(-20), logMsg]);
       if (isCoop) {
-        sendDepartmentAction('combatAction', { playerHp, enemyHp: newEnemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: true, dmg, actorName: player.name }, turn: 'resolve', log: logMsg });
+        sendAction('combatAction', { playerHp, enemyHp: newEnemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: true, dmg, actorName: player.name }, turn: 'resolve', log: logMsg });
       }
       if (newEnemyHp <= 0) {
         setIsCombatFinished(true);
@@ -546,7 +584,7 @@ export default function DepartmentView() {
         setCombatLog(prev => [...prev, finishLog]);
         addFacilityLog(`${player.name} suppressed ${enemy.name}!`, 'success');
         if (isCoop) {
-          sendDepartmentAction('combatFinish', { abnoId: enemy.abnoId, won: true, initiator: user?.id, enemyName: enemy.name });
+          sendAction('combatFinish', { abnoId: enemy.abnoId, won: true, initiator: user?.id, enemyName: enemy.name });
         } else {
           suppressBreach(enemy.abnoId, true);
         }
@@ -565,7 +603,7 @@ export default function DepartmentView() {
       const logMsg = `❌ ${enemy.name} dealt ${enemyDmg} damage to ${player.name}!`;
       setCombatLog(prev => [...prev.slice(-20), logMsg]);
       if (isCoop) {
-        sendDepartmentAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: false, dmg: enemyDmg, actorName: enemy.name }, turn: 'resolve', log: logMsg });
+        sendAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: false, dmg: enemyDmg, actorName: enemy.name }, turn: 'resolve', log: logMsg });
       }
       if (newPlayerHp <= 0) {
         setIsCombatFinished(true);
@@ -573,7 +611,7 @@ export default function DepartmentView() {
         setCombatLog(prev => [...prev, finishLog]);
         addFacilityLog(`${player.name} was defeated by ${enemy.name}!`, 'danger');
         if (isCoop) {
-          sendDepartmentAction('combatFinish', { abnoId: enemy.abnoId, won: false, initiator: user?.id, enemyName: enemy.name });
+          sendAction('combatFinish', { abnoId: enemy.abnoId, won: false, initiator: user?.id, enemyName: enemy.name });
         }
         return;
       }
@@ -608,14 +646,14 @@ export default function DepartmentView() {
         const logMsg = `👊 ${enemy.name} attacks for ${dmg} damage.`;
         setCombatLog(prev => [...prev.slice(-20), logMsg]);
         if (isCoop) {
-          sendDepartmentAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
+          sendAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
         }
         if (newPlayerHp <= 0) {
           setIsCombatFinished(true);
           setCombatLog(prev => [...prev, `💀 ${player.name} has fallen!`]);
           addFacilityLog(`${player.name} was defeated by ${enemy.name}!`, 'danger');
           if (isCoop) {
-            sendDepartmentAction('combatFinish', { abnoId: enemy.abnoId, won: false, initiator: user?.id, enemyName: enemy.name });
+            sendAction('combatFinish', { abnoId: enemy.abnoId, won: false, initiator: user?.id, enemyName: enemy.name });
           }
           return;
         }
@@ -623,7 +661,7 @@ export default function DepartmentView() {
         const logMsg = `🛡️ ${player.name} blocked the attack.`;
         setCombatLog(prev => [...prev.slice(-20), logMsg]);
         if (isCoop) {
-          sendDepartmentAction('combatAction', { playerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
+          sendAction('combatAction', { playerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
         }
       }
       setCombatTurn('player');
@@ -852,7 +890,7 @@ export default function DepartmentView() {
                 onClick={() => {
                   resolveOrdeal(facility.activeOrdeal!.id, true);
                   addFacilityLog(`${getDisplayName(user)} resolved ordeal: Victory`, 'success');
-                  if (isCoop) sendDepartmentAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: true });
+                  if (isCoop) sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: true });
                 }}
                 className="px-3 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded text-sm hover:bg-red-400 hover:text-gray-900 transition"
               >
@@ -862,7 +900,7 @@ export default function DepartmentView() {
                 onClick={() => {
                   resolveOrdeal(facility.activeOrdeal!.id, false);
                   addFacilityLog(`${getDisplayName(user)} resolved ordeal: Defeat`, 'danger');
-                  if (isCoop) sendDepartmentAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: false });
+                  if (isCoop) sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: false });
                 }}
                 className="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600 transition"
               >
@@ -924,7 +962,7 @@ export default function DepartmentView() {
                   alert(`✅ Advanced to Day ${result.newDay}`);
                   if (result.ordeal) alert(`⚠️ Ordeal triggered: ${result.ordeal.name}`);
                 } else alert(`❌ ${result.reason}`);
-                if (isCoop) sendDepartmentAction('advanceDay', {});
+                if (isCoop) sendAction('advanceDay', {});
               } else {
                 alert(`❌ Need ${requiredEnergy} energy to advance`);
               }
@@ -946,10 +984,9 @@ export default function DepartmentView() {
               if (confirm(confirmMsg)) {
                 const result = leaveFacility(user?.id || 'guest');
                 if (result.success) {
-                  if (isCoop && socketRef.current) {
-                    socketRef.current.emit('leaveDepartmentRoom', { roomId });
-                    socketRef.current.disconnect();
-                    socketRef.current = null;
+                  if (isCoop && wsRef.current) {
+                    sendAction('leaveDepartmentRoom', {});
+                    disconnectWebSocket();
                   }
                   useGameStore.setState((state) => ({
                     facility: {
@@ -1110,13 +1147,8 @@ export default function DepartmentView() {
                             setIsCombatFinished(false);
                             setCombatInitiator(user?.id || null);
                             setView('combat');
-                            if (isCoop && socketRef.current) {
-                              socketRef.current.emit('departmentAction', {
-                                roomId,
-                                action: 'startCombat',
-                                payload: { enemy, player, abnoId: abno.abnoId, initiator: user?.id },
-                                playerId: user?.id,
-                              });
+                            if (isCoop && wsRef.current) {
+                              sendAction('startCombat', { enemy, player, abnoId: abno.abnoId, initiator: user?.id });
                             }
                           }}
                           className="text-xs px-2 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition"
@@ -1145,7 +1177,7 @@ export default function DepartmentView() {
                               },
                             }));
                             addFacilityLog(`${getDisplayName(user)} removed ${abno.abnoName}`, 'info');
-                            if (isCoop) sendDepartmentAction('removeAbno', { abnoId: abno.abnoId });
+                            if (isCoop) sendAction('removeAbno', { abnoId: abno.abnoId });
                           }}
                           className="text-xs px-2 py-1 border border-gray-600 text-gray-400 rounded hover:border-red-400 hover:text-red-400 transition"
                         >
@@ -1222,7 +1254,7 @@ export default function DepartmentView() {
                       if (result.success) {
                         alert(`✅ ${result.abnormality} deployed!`);
                         addFacilityLog(`${getDisplayName(user)} deployed ${abno.name}`, 'success');
-                        if (isCoop) sendDepartmentAction('deployAbno', { abnoId: abno.id });
+                        if (isCoop) sendAction('deployAbno', { abnoId: abno.id });
                         setView('dashboard');
                       } else {
                         alert(`❌ ${result.reason}`);
@@ -1324,7 +1356,7 @@ export default function DepartmentView() {
                   const result = workOnAbnormality(selectedAbno.abnoId, type, user?.id || 'guest');
                   setWorkResult(result);
                   addFacilityLog(`${getDisplayName(user)} worked on ${selectedAbno.abnoName} (${type}) - ${result.isSuccess ? 'Success' : 'Failed'}`, result.isSuccess ? 'success' : 'danger');
-                  if (isCoop) sendDepartmentAction('work', { abnoId: selectedAbno.abnoId, workType: type });
+                  if (isCoop) sendAction('work', { abnoId: selectedAbno.abnoId, workType: type });
                   if (result.breached) alert(`⚠️ ${selectedAbno.abnoName} has breached!`);
                   if (result.boostDropped) alert(`🎉 Temperance Boost dropped!`);
                   setTimeout(() => setWorkResult(null), 3000);
@@ -1381,7 +1413,7 @@ export default function DepartmentView() {
                     if (result.success) {
                       alert(`✅ ${r.name} unlocked!`);
                       addFacilityLog(`${getDisplayName(user)} researched ${r.name}`, 'success');
-                      if (isCoop) sendDepartmentAction('unlockResearch', { researchId: r.id });
+                      if (isCoop) sendAction('unlockResearch', { researchId: r.id });
                     } else alert(`❌ ${result.reason}`);
                   }}
                   disabled={unlocked}
@@ -1468,7 +1500,7 @@ export default function DepartmentView() {
                   onClick={() => {
                     addBullets(b.key, 10);
                     addFacilityLog(`${getDisplayName(user)} added ${b.label} bullets`, 'info');
-                    if (isCoop) sendDepartmentAction('addBullets', { type: b.key, amount: 10 });
+                    if (isCoop) sendAction('addBullets', { type: b.key, amount: 10 });
                   }}
                   className="text-xs px-2 py-0.5 border border-gray-600 text-gray-400 rounded hover:border-cyan-400 hover:text-cyan-400 transition"
                 >
@@ -1514,7 +1546,7 @@ export default function DepartmentView() {
               if (result.success) {
                 alert(`🔄 Reset to Day ${targetDay}`);
                 addFacilityLog(`${getDisplayName(user)} used Memory Repository to Day ${targetDay}`, 'warning');
-                if (isCoop) sendDepartmentAction('memoryRepository', { targetDay });
+                if (isCoop) sendAction('memoryRepository', { targetDay });
                 setView('dashboard');
               } else {
                 alert(`❌ ${result.reason}`);
@@ -1563,7 +1595,7 @@ export default function DepartmentView() {
                   setIsCombatFinished(true);
                   setView('dashboard');
                   addFacilityLog(`${getDisplayName(user)} retreated from combat`, 'danger');
-                  if (isCoop) sendDepartmentAction('combatRetreat', {});
+                  if (isCoop) sendAction('combatRetreat', {});
                 } else if (!isInitiator) {
                   alert('Only the initiator can retreat.');
                 }

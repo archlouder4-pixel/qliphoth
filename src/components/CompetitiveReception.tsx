@@ -1,4 +1,5 @@
 // CompetitiveReception.tsx – Data-driven, uses damage types & infusions, no hardcoded identity checks
+// WebSocket version: connects to VITE_SERVER_URL/room/reception/match
 import { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import {
@@ -42,6 +43,7 @@ const ULTIMATE_GAIN_MIN = 0.003;
 const ULTIMATE_GAIN_MAX = 0.03;
 const BOSS_BONUS_TIME = 3;
 const BOSS_SCORE_BONUS = 5000;
+const WS_RECONNECT_DELAY = 3000; // ms
 
 // ─── Types ──────────────────────────────────────────────────────────────
 interface Enemy {
@@ -526,6 +528,11 @@ export default function CompetitiveReception() {
   const playerName = user ? getDisplayName(user) : 'Player';
   const playerScore = Math.max(competitiveScore, weeklyTotal);
 
+  // ─── WebSocket refs ──────────────────────────────────────────────────
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const shouldReconnectRef = useRef(true);
+
   // ─── Bracket/Ranking fetch effects ─────────────────────────────────────
   useEffect(() => {
     if (crView !== 'bracket' || !crRegion || !user) return;
@@ -588,6 +595,157 @@ export default function CompetitiveReception() {
     return () => { cancelled = true; };
   }, [crView, crRegion, currentWeek, user, playerScore, playerName]);
 
+  // ─── WebSocket connection ────────────────────────────────────────────
+  const connectWebSocket = () => {
+    if (!user) return;
+    const serverUrl = import.meta.env.VITE_SERVER_URL || 'ws://localhost:3001';
+    // Ensure the URL starts with ws:// or wss://
+    let wsUrl = serverUrl;
+    if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+      // If it's just a hostname, assume wss:// with path
+      wsUrl = `wss://${wsUrl}`;
+    }
+    // Append the path if not already present
+    if (!wsUrl.includes('/room/reception/match')) {
+      wsUrl = `${wsUrl}/room/reception/match`;
+    }
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('WebSocket connected for Competitive Reception');
+      // Send initial state if needed? The server will request it.
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+      } catch (e) {
+        console.warn('Invalid WebSocket message:', event.data);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket closed for Competitive Reception');
+      // Reconnect
+      if (shouldReconnectRef.current) {
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = window.setTimeout(() => {
+          connectWebSocket();
+        }, WS_RECONNECT_DELAY);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
+  };
+
+  const disconnectWebSocket = () => {
+    shouldReconnectRef.current = false;
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  };
+
+  // ─── WebSocket message handler ──────────────────────────────────────
+  const handleWebSocketMessage = (data: any) => {
+    const { type, payload } = data;
+    switch (type) {
+      case 'roomJoined':
+        // { roomId, playerIndex }
+        setMyPlayerIndex(payload.playerIndex);
+        setPhase('combat');
+        setQueued(false);
+        addLog('[SYSTEM] Matched! Battle begins.');
+        break;
+      case 'queued':
+        setQueued(true);
+        addLog('[SYSTEM] Searching for opponent...');
+        break;
+      case 'matchCancelled':
+        setQueued(false);
+        addLog('[SYSTEM] Match search cancelled.');
+        break;
+      case 'gameState':
+        setRoomState(payload);
+        // update ultimate bar
+        const myKey = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
+        const me = payload[myKey];
+        if (me) setUltBarValue(me.ultimateBar || 0);
+        // handle clash result dedup (same as before)
+        if (payload.clashResult) {
+          const clashSig = JSON.stringify(payload.clashResult);
+          if (clashSig !== clashSigRef.current) {
+            clashSigRef.current = clashSig;
+            const { actorName, pName, eName, won, dmg, ultimateGain } = payload.clashResult;
+            const result = won ? '✅ Won' : '❌ Lost';
+            addLog(`[${actorName}] ${result} clash! ${pName} vs ${eName} → ${dmg} dmg`);
+            if (won && ultimateGain !== undefined) {
+              addLog(`[ULTIMATE] Bar +${(ultimateGain * 100).toFixed(1)}%`);
+            }
+            setSelectedSkill(null);
+            setIsSubmitting(false);
+            setPassiveActivating(false);
+            setShowClashResult(true);
+          }
+        } else {
+          clashSigRef.current = null;
+          setShowClashResult(false);
+          if (payload.p1SkillIdx === null && payload.p2SkillIdx === null) {
+            setPassiveActivating(false);
+          }
+        }
+        if (payload.winner) {
+          const winnerName = payload.winner === 'p1' ? payload.p1.playerName : payload.p2.playerName;
+          addLog(`🏆 ${winnerName} wins the match!`);
+        }
+        break;
+      case 'matchResult':
+        setMatchResult(payload);
+        setPhase('result');
+        const isP1 = myPlayerIndexRef.current === 0;
+        const won = (isP1 && payload.winner === 'p1') || (!isP1 && payload.winner === 'p2');
+        const score = isP1 ? payload.scoreChanges?.p1 || 0 : payload.scoreChanges?.p2 || 0;
+        addLog(`[RESULT] ${won ? 'Victory!' : 'Defeat!'} Score: ${score}`);
+        break;
+      case 'leaderboard':
+        setLeaderboard(payload);
+        break;
+      case 'error':
+        // payload is error message
+        console.warn('WebSocket error:', payload);
+        // maybe show a toast or alert
+        break;
+      default:
+        console.warn('Unknown WebSocket message type:', type);
+    }
+  };
+
+  const sendAction = (action: string, payload: any = {}) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action, payload }));
+    } else {
+      console.warn('WebSocket not open, cannot send action:', action);
+    }
+  };
+
+  // ─── Connect on mount, disconnect on unmount ────────────────────────
+  useEffect(() => {
+    if (user) {
+      connectWebSocket();
+    }
+    return () => {
+      disconnectWebSocket();
+    };
+  }, [user]);
+
   // ─── Combat state ──────────────────────────────────────────────────
   const [phase, setPhase] = useState<'teamSelect' | 'preparing' | 'idle' | 'fighting' | 'waveClear' | 'defeat' | 'finished'>('idle');
   const [wave, setWave] = useState(1);
@@ -627,6 +785,19 @@ export default function CompetitiveReception() {
 
   // ─── Passive auto‑select state ────────────────────────────────────
   const [passiveActivating, setPassiveActivating] = useState(false);
+
+  // ─── Refs ──────────────────────────────────────────────────────────
+  const myPlayerIndexRef = useRef<0 | 1>(0);
+  const roomStateRef = useRef<any>(null);
+  const clashSigRef = useRef<string | null>(null);
+  const [myPlayerIndex, setMyPlayerIndex] = useState<0 | 1>(0);
+  const [roomState, setRoomState] = useState<any>(null);
+  const [queued, setQueued] = useState(false);
+  const [matchResult, setMatchResult] = useState<any>(null);
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [showClashResult, setShowClashResult] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [ultBarValue, setUltBarValue] = useState(0);
 
   useEffect(() => {
     const hasShadowUnlock = completedChapters.includes('ch29');
@@ -1022,6 +1193,101 @@ export default function CompetitiveReception() {
     } else {
       setTransformationCountdown(0);
     }
+
+    // Send findMatch via WebSocket
+    const playerData = buildPlayerData();
+    if (playerData) {
+      sendAction('findMatch', playerData);
+    }
+  };
+
+  // ─── Helper to build player data for matchmaking ──────────────────
+  const buildPlayerData = () => {
+    // This replicates the logic from the original buildPlayerData function,
+    // adapted to return the payload for the WebSocket.
+    // For brevity, we assume the identity and stats are already computed.
+    // We'll reconstruct based on the existing data.
+    const identity = identityData;
+    if (!identity) return null;
+    const weaponId = activeIdentity?.equippedWeaponId || null;
+    const giftIds = activeIdentity ? (equippedGifts?.[identity.id] || []) : [];
+    const stats = scaledStats(identity, activeIdentity?.level || 1, activeIdentity?.classSkillLevel ?? 1);
+    const totalHp = stats.hp + giftStats.hp;
+    const totalAtk = stats.atk + giftStats.atk + (weaponData?.baseStats.atk || 0);
+    const totalDef = stats.def + giftStats.def;
+    const totalSpd = stats.spd + giftStats.spd;
+    const classCategory = getClassCategory(identity.id);
+    const classEffect = classCategoryEffect(activeIdentity?.classSkillLevel ?? 1);
+
+    const baseSkills = identity.skills.filter(s => s.type !== 'class').map((skill, idx) => {
+      const sl = activeIdentity?.skillLevels?.[idx] ?? 1;
+      const power = skill.basePower + skill.powerGrowth * (sl - 1);
+      const coins = skill.coinGrowth > 0 ? skill.baseCoins + Math.floor((sl - 1) / skill.coinGrowth) : skill.baseCoins;
+      return {
+        ...skill,
+        power: Math.min(power, MAX_CLASH_POWER),
+        coins,
+        level: sl,
+        isEgo: skill.type === 'ego',
+        isTransformed: false,
+        isUltimate: skill.isUltimate || skill.type === 'ego',
+        damageType: skill.damageType || identity.element,
+        infusion: skill.infusion || identity.baseInfusion || 'Slash',
+      };
+    });
+
+    let transformedSkills = [];
+    if (identity.transformedSkills && identity.transformedSkills.length > 0) {
+      transformedSkills = identity.transformedSkills.map((s) => {
+        const lvl = 1;
+        const power = s.basePower + s.powerGrowth * (lvl - 1);
+        const coins = s.coinGrowth > 0 ? s.baseCoins + Math.floor((lvl - 1) / s.coinGrowth) : s.baseCoins;
+        return {
+          ...s,
+          power: Math.min(power, MAX_CLASH_POWER),
+          coins,
+          level: lvl,
+          isEgo: s.type === 'ego',
+          isTransformed: true,
+          isUltimate: s.isUltimate || false,
+          damageType: s.damageType || identity.element,
+          infusion: s.infusion || identity.baseInfusion || 'Slash',
+        };
+      });
+    }
+
+    return {
+      identityId: identity.id,
+      weaponId: weaponId,
+      giftIds: giftIds.map(g => g.giftId).filter(Boolean),
+      playerName: getDisplayName(user) || 'Player',
+      stats: {
+        score: competitiveScore,
+        lives: 5,
+        hp: totalHp,
+        maxHp: totalHp,
+        atk: totalAtk,
+        def: totalDef,
+        spd: totalSpd,
+        sp: 50,
+        shield: 0,
+        resolveStacks: 0,
+        witherStacks: 0,
+        bleedStacks: 0,
+        ultimateBar: 0,
+        transformationActive: false,
+        transformationTurnsLeft: 0,
+      },
+      baseSkills,
+      transformedSkills,
+      ultimateDuration: identity.ultimateDuration || 0,
+      transformationTrigger: identity.transformationTrigger || 'none',
+      hasUltimate: identity.skills.some(s => s.type === 'ego' || s.isUltimate),
+      transformationPassive: identity.transformationPassive || null,
+      classCategory,
+      classEffect,
+      weaponPassive: weaponData?.passive || '',
+    };
   };
 
   // ─── Clash helpers ──────────────────────────────────────────────────
@@ -1219,6 +1485,31 @@ export default function CompetitiveReception() {
       actorName: identityData?.name || '???'
     });
     setTurn('resolve');
+
+    // Send skill selection via WebSocket
+    const myKey = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
+    // We'll send the selected skill index to the server for the opponent.
+    // But we already sent it when we selected the skill initially? Actually the flow:
+    // In the original code, selecting skill is sent separately via selectSkill.
+    // We'll handle skill selection via sendAction('selectSkill', { skillIndex: idx }).
+    // That is already called in the selectSkill function.
+  };
+
+  // ─── selectSkill function (called from UI) ──────────────────────────
+  const selectSkill = (idx: number) => {
+    if (isSubmitting || passiveActivating) return;
+    const myKey = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
+    if (roomStateRef.current?.[myKey + 'SkillIdx'] !== null) return;
+
+    setIsSubmitting(true);
+    setSelectedSkill(idx);
+    sendAction('selectSkill', { skillIndex: idx });
+    const me = roomStateRef.current?.[myKey];
+    if (me) {
+      const skill = me.skills?.[idx];
+      if (skill) addLog(`[${me.playerName}] Selected ${skill.name}`);
+    }
+    addLog('[SYSTEM] Skill submitted – waiting for opponent.');
   };
 
   // ─── Resolve phase ──────────────────────────────────────────────────
@@ -1390,13 +1681,31 @@ export default function CompetitiveReception() {
         setSelectedSkill(randomIdx);
         setTimeout(() => {
           setPassiveActivating(false);
-          playerAct();
+          // Trigger playerAct automatically?
+          // The original code used playerAct(); but we need to ensure we send the action.
+          // We'll call selectSkill which will send the skill selection.
+          selectSkill(randomIdx);
         }, 300);
       } else {
         setPassiveActivating(false);
       }
     }, 600);
   }, [phase, turn, enemies, passiveActivating, identityData, playerSkills]);
+
+  // ─── findMatch button handler ──────────────────────────────────────
+  const findMatch = () => {
+    if (!user) return;
+    const playerData = buildPlayerData();
+    if (!playerData) return;
+    sendAction('findMatch', playerData);
+    addLog('[SYSTEM] Finding match...');
+  };
+
+  const cancelMatch = () => {
+    sendAction('cancelMatch', {});
+    setQueued(false);
+    addLog('[SYSTEM] Match search cancelled.');
+  };
 
   // ─── Render ──────────────────────────────────────────────────────────
   return (

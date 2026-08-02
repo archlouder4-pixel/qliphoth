@@ -1,7 +1,8 @@
 // ReceptionMode.tsx – fully refactored, data-driven, no hardcoded identity checks
+// Now uses native WebSocket instead of Socket.IO
 import React, { useState, useEffect, useRef } from 'react';
-import io from 'socket.io-client';
 import useGameStore from '../store/gameStore';
+import { useAuth } from '../auth/AuthContext';
 import {
   identities,
   scaledStats,
@@ -16,20 +17,10 @@ import {
 } from '../data/identitiesPassives';
 import { weapons, canEquipWeapon } from '../data/weapons';
 import { egoGifts } from '../data/egoGifts';
+import { applyWeaponPassive } from '../data/weaponPassives';
 
-// ✅ NEW: import weapon passive system (even if not used directly for display)
-import { applyWeaponPassive } from '../data/weaponPassives'; 
-
-const SERVER_URL = process.env.REACT_APP_SERVER_URL || 'http://localhost:3001';
-
-interface ReceptionModeProps {
-  onExit: () => void;
-  availableIdentities: string[];
-  initialScore?: number;
-  initialLives?: number;
-  initialWins?: number;
-  initialLosses?: number;
-}
+// ─── Constants ──────────────────────────────────────────────────────────
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
 // ─── Rank configuration ──────────────────────────────────────────────
 const RANK_GROUPS = [
@@ -149,6 +140,13 @@ export default function ReceptionMode({
   initialLosses = 0,
 }: ReceptionModeProps) {
   const store = useGameStore();
+  const { user } = useAuth();
+
+  // ─── WebSocket ref ───────────────────────────────────────────────────
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+
+  // ─── State ──────────────────────────────────────────────────────────
   const [phase, setPhase] = useState<'lobby' | 'combat' | 'result'>('lobby');
   const [playerName, setPlayerName] = useState('Agent');
   const [identityId, setIdentityId] = useState(availableIdentities[0] || '');
@@ -165,8 +163,7 @@ export default function ReceptionMode({
   const [passiveActivating, setPassiveActivating] = useState(false);
   const [weaponError, setWeaponError] = useState<string | null>(null);
 
-  // Refs
-  const socketRef = useRef<any>(null);
+  // Refs for latest values in async callbacks
   const myPlayerIndexRef = useRef<0 | 1>(0);
   const roomStateRef = useRef<any>(null);
   const selectSkillRef = useRef<(idx: number) => void>(() => {});
@@ -185,7 +182,6 @@ export default function ReceptionMode({
     if (!identity?.signatureWeaponId) return;
     const owned = store.ownedIdentities.find(o => o.identityId === identityId);
     if (!owned) return;
-    // Only equip if slot is empty.
     if (owned.equippedWeaponId) return;
     const sigWeaponId = identity.signatureWeaponId;
     if (!canEquipWeapon(identityId, sigWeaponId)) return;
@@ -219,10 +215,10 @@ export default function ReceptionMode({
     setSelectedSkill(randomIdx);
 
     setTimeout(() => {
-      if (socketRef.current) {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         const myKey2 = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
         if (roomStateRef.current?.[myKey2 + 'SkillIdx'] === null) {
-          socketRef.current.emit('selectSkill', randomIdx);
+          sendAction('selectSkill', randomIdx);
           const skill = me.skills?.[randomIdx];
           if (skill) addLogRef.current(`[AUTO] Selected ${skill.name}`);
           setIsSubmitting(true);
@@ -254,111 +250,172 @@ export default function ReceptionMode({
     }
   }, [phase, roomState, showClashResult, isSubmitting, passiveActivating]);
 
-  // ─── Socket connection ────────────────────────────────────────────
-  useEffect(() => {
-    const newSocket = io(SERVER_URL);
-    socketRef.current = newSocket;
+  // ─── WebSocket connection helpers ──────────────────────────────────
+  const connectWebSocket = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+    const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
+    const ws = new WebSocket(`wss://${wsUrl}/room/reception/match`);
+    wsRef.current = ws;
 
-    const onRoomJoined = ({ roomId, playerIndex }: any) => {
-      myPlayerIndexRef.current = playerIndex;
-      setMyPlayerIndex(playerIndex);
-      setPhase('combat');
-      setQueued(false);
-      addLogRef.current('[SYSTEM] Matched! Battle begins.');
+    ws.onopen = () => {
+      console.log('WebSocket connected to Reception');
+      sendAction('getLeaderboard');
     };
 
-    const onQueued = () => {
-      setQueued(true);
-      addLogRef.current('[SYSTEM] Searching for opponent...');
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+      } catch (err) {
+        console.error('Failed to parse WebSocket message:', err);
+      }
     };
 
-    const onMatchCancelled = () => {
-      setQueued(false);
-      addLogRef.current('[SYSTEM] Match search cancelled.');
+    ws.onclose = () => {
+      console.log('WebSocket closed, reconnecting...');
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connectWebSocket();
+      }, 3000);
     };
 
-    const onGameState = (state: any) => {
-      setRoomState(state);
-      roomStateRef.current = state;
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
+  };
 
-      const myKey = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
-      const me = state[myKey];
-      if (me) {
-        setUltBarValue(me.ultimateBar || 0);
+  const disconnectWebSocket = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  };
+
+  const sendAction = (type: string, payload?: any) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type, payload }));
+    } else {
+      console.warn('WebSocket not connected, cannot send:', type);
+    }
+  };
+
+  // ─── Handle incoming WebSocket messages ──────────────────────────
+  const handleWebSocketMessage = (data: any) => {
+    switch (data.type) {
+      case 'roomJoined': {
+        const playerIndex = data.playerIndex;
+        myPlayerIndexRef.current = playerIndex;
+        setMyPlayerIndex(playerIndex);
+        setPhase('combat');
+        setQueued(false);
+        addLogRef.current('[SYSTEM] Matched! Battle begins.');
+        break;
       }
 
-      if (state.clashResult) {
-        const clashSig = JSON.stringify(state.clashResult);
-        if (clashSig !== clashSigRef.current) {
-          clashSigRef.current = clashSig;
-          const { actorName, pName, eName, won, dmg, ultimateGain } = state.clashResult;
-          const result = won ? '✅ Won' : '❌ Lost';
-          addLogRef.current(`[${actorName}] ${result} clash! ${pName} vs ${eName} → ${dmg} dmg`);
-          if (won && ultimateGain !== undefined) {
-            addLogRef.current(`[ULTIMATE] Bar +${(ultimateGain * 100).toFixed(1)}%`);
+      case 'queued': {
+        setQueued(true);
+        addLogRef.current('[SYSTEM] Searching for opponent...');
+        break;
+      }
+
+      case 'matchCancelled': {
+        setQueued(false);
+        addLogRef.current('[SYSTEM] Match search cancelled.');
+        break;
+      }
+
+      case 'gameState': {
+        const state = data.state;
+        setRoomState(state);
+        roomStateRef.current = state;
+
+        const myKey = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
+        const me = state[myKey];
+        if (me) {
+          setUltBarValue(me.ultimateBar || 0);
+        }
+
+        if (state.clashResult) {
+          const clashSig = JSON.stringify(state.clashResult);
+          if (clashSig !== clashSigRef.current) {
+            clashSigRef.current = clashSig;
+            const { actorName, pName, eName, won, dmg, ultimateGain } = state.clashResult;
+            const result = won ? '✅ Won' : '❌ Lost';
+            addLogRef.current(`[${actorName}] ${result} clash! ${pName} vs ${eName} → ${dmg} dmg`);
+            if (won && ultimateGain !== undefined) {
+              addLogRef.current(`[ULTIMATE] Bar +${(ultimateGain * 100).toFixed(1)}%`);
+            }
+            setSelectedSkill(null);
+            setIsSubmitting(false);
+            setPassiveActivating(false);
+            setShowClashResult(true);
           }
-          setSelectedSkill(null);
-          setIsSubmitting(false);
-          setPassiveActivating(false);
-          setShowClashResult(true);
+        } else {
+          clashSigRef.current = null;
+          setShowClashResult(false);
+          if (state.p1SkillIdx === null && state.p2SkillIdx === null) {
+            setPassiveActivating(false);
+          }
         }
-      } else {
-        clashSigRef.current = null;
-        setShowClashResult(false);
-        if (state.p1SkillIdx === null && state.p2SkillIdx === null) {
-          setPassiveActivating(false);
+
+        if (state.winner) {
+          const winnerName = state.winner === 'p1' ? state.p1.playerName : state.p2.playerName;
+          addLogRef.current(`🏆 ${winnerName} wins the match!`);
         }
+        break;
       }
 
-      if (state.winner) {
-        const winnerName = state.winner === 'p1' ? state.p1.playerName : state.p2.playerName;
-        addLogRef.current(`🏆 ${winnerName} wins the match!`);
+      case 'matchResult': {
+        setMatchResult(data);
+        setPhase('result');
+        const isP1 = myPlayerIndexRef.current === 0;
+        const won = (isP1 && data.winner === 'p1') || (!isP1 && data.winner === 'p2');
+        const score = isP1 ? data.scoreChanges?.p1 || 0 : data.scoreChanges?.p2 || 0;
+        addLogRef.current(`[RESULT] ${won ? 'Victory!' : 'Defeat!'} Score: ${score}`);
+        break;
       }
-    };
 
-    const onMatchResult = (result: any) => {
-      setMatchResult(result);
-      setPhase('result');
-      const isP1 = myPlayerIndexRef.current === 0;
-      const won = (isP1 && result.winner === 'p1') || (!isP1 && result.winner === 'p2');
-      const score = isP1 ? result.scoreChanges?.p1 || 0 : result.scoreChanges?.p2 || 0;
-      addLogRef.current(`[RESULT] ${won ? 'Victory!' : 'Defeat!'} Score: ${score}`);
-    };
+      case 'leaderboard': {
+        setLeaderboard(data);
+        break;
+      }
 
-    const onLeaderboard = (data: any[]) => {
-      setLeaderboard(data);
-    };
+      case 'error': {
+        alert(`❌ ${data.message}`);
+        break;
+      }
 
-    newSocket.on('roomJoined', onRoomJoined);
-    newSocket.on('queued', onQueued);
-    newSocket.on('matchCancelled', onMatchCancelled);
-    newSocket.on('gameState', onGameState);
-    newSocket.on('matchResult', onMatchResult);
-    newSocket.on('leaderboard', onLeaderboard);
+      case 'welcome': {
+        console.log('Welcome from server:', data.message);
+        break;
+      }
 
-    newSocket.emit('getLeaderboard');
+      default:
+        console.log('Unhandled WebSocket message:', data);
+    }
+  };
 
+  // ─── Socket connection (initial) ──────────────────────────────────
+  useEffect(() => {
+    connectWebSocket();
     return () => {
-      newSocket.off('roomJoined', onRoomJoined);
-      newSocket.off('queued', onQueued);
-      newSocket.off('matchCancelled', onMatchCancelled);
-      newSocket.off('gameState', onGameState);
-      newSocket.off('matchResult', onMatchResult);
-      newSocket.off('leaderboard', onLeaderboard);
-      newSocket.disconnect();
-      socketRef.current = null;
+      disconnectWebSocket();
     };
   }, []);
 
   // ─── Select Skill ──────────────────────────────────────────────────
   const selectSkill = (idx: number) => {
-    if (!socketRef.current || isSubmitting || passiveActivating) return;
+    if (!wsRef.current || isSubmitting || passiveActivating) return;
     const myKey = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
     if (roomStateRef.current?.[myKey + 'SkillIdx'] !== null) return;
 
     setIsSubmitting(true);
     setSelectedSkill(idx);
-    socketRef.current.emit('selectSkill', idx);
+    sendAction('selectSkill', idx);
     const me = roomStateRef.current?.[myKey];
     if (me) {
       const skill = me.skills?.[idx];
@@ -390,13 +447,11 @@ export default function ReceptionMode({
 
     let weaponId = owned.equippedWeaponId || null;
 
-    // FORCED EQUIP: Only Arthur is forced to have his signature weapon (starter unit).
     if (identityId === 'arthur_excalibur') {
       const targetWeaponId = 'eclipse_blade';
       if (canEquipWeapon(identityId, targetWeaponId)) {
         const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
         if (ownedWeapon) {
-          // Override whatever is equipped.
           if (owned.equippedWeaponId !== targetWeaponId) {
             store.setEquippedWeapon(identityId, targetWeaponId);
           }
@@ -412,7 +467,6 @@ export default function ReceptionMode({
         return null;
       }
     } else {
-      // Gentle auto-equip for everyone else (only if no weapon equipped)
       if (!weaponId && identity.signatureWeaponId) {
         const sigWeaponId = identity.signatureWeaponId;
         if (canEquipWeapon(identityId, sigWeaponId)) {
@@ -434,7 +488,6 @@ export default function ReceptionMode({
       }
     }
 
-    // If still no weapon, prevent match
     if (!weaponId) {
       setWeaponError('No weapon equipped. Please equip a compatible weapon.');
       addLog('[SYSTEM] No weapon equipped. Please equip a compatible weapon.');
@@ -516,7 +569,7 @@ export default function ReceptionMode({
       weaponId,
       giftIds: giftIds.map(g => g.giftId).filter(Boolean),
       playerName,
-      classes: identity.classes, // <-- ADDED: pass raw classes to UI
+      classes: identity.classes,
       stats: {
         score: initialScore,
         lives: initialLives,
@@ -548,16 +601,16 @@ export default function ReceptionMode({
 
   // ─── Find match ────────────────────────────────────────────────────
   const findMatch = () => {
-    if (!socketRef.current) return;
+    if (!wsRef.current) return;
     const playerData = buildPlayerData();
     if (!playerData) return;
-    socketRef.current.emit('findMatch', playerData);
+    sendAction('findMatch', playerData);
     addLog('[SYSTEM] Finding match...');
   };
 
   const cancelMatch = () => {
-    if (!socketRef.current) return;
-    socketRef.current.emit('cancelMatch');
+    if (!wsRef.current) return;
+    sendAction('cancelMatch');
   };
 
   // ─── Rank info ────────────────────────────────────────────────────
@@ -573,7 +626,6 @@ export default function ReceptionMode({
       const owned = store.ownedIdentities.find(o => o.identityId === identityId);
       if (!owned) return 'None';
       let weaponId = owned.equippedWeaponId;
-      // If Arthur, force check in UI display as well.
       if (identityId === 'arthur_excalibur' && weaponId !== 'eclipse_blade') {
         const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === 'eclipse_blade');
         if (ownedWeapon && canEquipWeapon(identityId, 'eclipse_blade')) {
@@ -877,7 +929,6 @@ export default function ReceptionMode({
               <div className="h-1.5 bg-[#1a2332] relative overflow-hidden" style={{ clipPath: 'polygon(0 0, calc(100% - 3px) 0, 100% 3px, 100% 100%, 3px 100%, 0 calc(100% - 3px))' }}>
                 <div className="h-full bg-[#ff2a6d] transition-all duration-500" style={{ width: `${(me.hp / me.maxHp) * 100}%` }} />
               </div>
-              {/* ─── UPDATED: show classes + combat category ─── */}
               <div className="text-[10px] text-[#4a5568] mt-1 flex flex-wrap gap-1 items-center">
                 {me.classes?.map((cls: string) => {
                   const info = getClassInfo(cls as CharacterClass);
@@ -944,7 +995,6 @@ export default function ReceptionMode({
               <div className="h-1.5 bg-[#1a2332] relative overflow-hidden" style={{ clipPath: 'polygon(0 0, calc(100% - 3px) 0, 100% 3px, 100% 100%, 3px 100%, 0 calc(100% - 3px))' }}>
                 <div className="h-full bg-[#ff2a6d] transition-all duration-500" style={{ width: `${(opponent.hp / opponent.maxHp) * 100}%` }} />
               </div>
-              {/* ─── UPDATED: show opponent's classes + combat category ─── */}
               <div className="text-[10px] text-[#4a5568] mt-1 flex flex-wrap gap-1 items-center">
                 {opponent.classes?.map((cls: string) => {
                   const info = getClassInfo(cls as CharacterClass);

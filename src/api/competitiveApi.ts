@@ -1,10 +1,7 @@
-// Client for the Qliphoth competitive backend.
-// In development, uses localhost:3001; in production, uses the Cloudflare Worker.
+// src/api/competitiveApi.ts
+// Client for the Qliphoth competitive backend – now uses VITE_SERVER_URL
 
-// ─── Use local server in development ──────────────────────────────
-const API_BASE = import.meta.env.DEV
-  ? 'http://localhost:3001'          // local Node.js server (socket + REST)
-  : 'https://qliphoth-backend.archlouder4.workers.dev';
+const BASE_URL = (import.meta.env.VITE_SERVER_URL || 'http://localhost:3001').replace(/\/+$/, '');
 
 export type CRRegion = 'NA' | 'SEA' | 'Asia' | 'AP';
 export type Squad = 'Beginner' | 'Amateur' | 'Expert' | 'Professional';
@@ -23,7 +20,7 @@ export interface RemoteRankingEntry extends RemotePlayerEntry {
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -36,7 +33,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function getJson<T>(path: string, params: Record<string, string>): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
+  const url = new URL(`${BASE_URL}${path}`);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   const res = await fetch(url.toString());
   const data = await res.json().catch(() => null);
@@ -46,8 +43,7 @@ async function getJson<T>(path: string, params: Record<string, string>): Promise
   return data as T;
 }
 
-// Call once after login (and whenever Discord identity info changes) so the
-// backend has a record for this player before any score/region calls.
+// ─── Player sync ──────────────────────────────────────────────────────
 export function syncPlayer(params: {
   userId: string;
   isGuest: boolean;
@@ -58,16 +54,17 @@ export function syncPlayer(params: {
   return postJson('/api/player/sync', params);
 }
 
-// One-time, permanent region lock. Throws if the account already has a region.
+// ─── Region locking ──────────────────────────────────────────────────
 export function setPlayerRegion(userId: string, region: CRRegion): Promise<{ ok: true; region: CRRegion }> {
   return postJson('/api/player/region', { userId, region });
 }
 
-// Guest-only display name change. Throws (403) if called for a Discord account.
+// ─── Guest name change ──────────────────────────────────────────────
 export function setGuestName(userId: string, name: string): Promise<{ ok: true; name: string }> {
   return postJson('/api/player/name', { userId, name });
 }
 
+// ─── Score submission ─────────────────────────────────────────────────
 export function submitScore(params: {
   userId: string;
   region: CRRegion;
@@ -81,12 +78,14 @@ export function submitScore(params: {
   return postJson('/api/score/submit', params);
 }
 
+// ─── Bracket ──────────────────────────────────────────────────────────
 export function fetchBracket(region: CRRegion, week: number, squad: Squad): Promise<{
   region: CRRegion; week: number; squad: Squad; entries: RemotePlayerEntry[];
 }> {
   return getJson('/api/bracket', { region, week: String(week), squad });
 }
 
+// ─── Ranking ──────────────────────────────────────────────────────────
 export function fetchRanking(region: CRRegion, week: number, userId: string): Promise<{
   region: CRRegion; week: number; total: number; top: RemoteRankingEntry[]; playerEntry: RemoteRankingEntry | null;
 }> {

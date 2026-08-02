@@ -1,7 +1,6 @@
-// ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op)
+// ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op) with native WebSocket
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
-import io from 'socket.io-client';
 import {
   identities,
   scaledStats,
@@ -34,8 +33,9 @@ import { useAuth } from '../auth/AuthContext';
 const MAX_CLASH_POWER = 50;
 const ULTIMATE_GAIN_MIN = 0.003;
 const ULTIMATE_GAIN_MAX = 0.03;
-const SERVER_URL = process.env.REACT_APP_SERVER_URL || 'http://localhost:3001';
 const MAX_PLAYERS = 3;
+// Use environment variable for backend URL (default for production)
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
 interface ExplorationEnemy extends RawExplorationEnemy {
   damageType: string;
@@ -301,7 +301,9 @@ export default function ExplorationView() {
     addEclipseResonanceMaterials,
   } = store;
 
-  const socketRef = useRef<any>(null);
+  // ─── WebSocket ref ───────────────────────────────────────────────────
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
 
   // ─── Game mode state ──────────────────────────────────────────────
   const [gameMode, setGameMode] = useState<'solo' | 'coop'>('solo');
@@ -443,27 +445,181 @@ export default function ExplorationView() {
     }
   };
 
+  // ─── Co-op: WebSocket helpers ──────────────────────────────────────
+  const connectWebSocket = (roomId: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+    const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
+    const ws = new WebSocket(`wss://${wsUrl}/room/exploration/${roomId}`);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('WebSocket connected to exploration room');
+      // Send join message
+      const identityState = buildIdentityState(selectedCoopIdentityId, getDisplayName(user), store);
+      if (!identityState) {
+        addLog('⚠️ Could not build identity state.');
+        ws.close();
+        return;
+      }
+      ws.send(JSON.stringify({
+        type: 'join',
+        playerId: user?.id || crypto.randomUUID(),
+        playerName: getDisplayName(user),
+        identityState,
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+      } catch (err) {
+        console.error('Failed to parse WebSocket message:', err);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket closed, reconnecting...');
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = setTimeout(() => {
+        if (roomId) connectWebSocket(roomId);
+      }, 3000);
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
+  };
+
+  const disconnectWebSocket = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  };
+
+  const sendAction = (type: string, payload?: any) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type, payload }));
+    } else {
+      alert('WebSocket is not connected. Please try again.');
+    }
+  };
+
+  // ─── Handle incoming WebSocket messages ──────────────────────────
+  const handleWebSocketMessage = (data: any) => {
+    switch (data.type) {
+      case 'explorationRoomCreated':
+        setRoomId(data.roomId);
+        setPlayers(data.players);
+        setMyPlayerIndex(data.players.findIndex((p: any) => p.id === user?.id));
+        setIsHost(true);
+        setSelectedPlace(null);
+        setRoomPhase('placeSelect');
+        setIsWaitingForHost(false);
+        addLog(`🌐 Room created. You are the host. Select a place and difficulty.`);
+        break;
+
+      case 'explorationRoomJoined':
+        setRoomId(data.roomId);
+        setPlayers(data.players);
+        setMyPlayerIndex(data.players.findIndex((p: any) => p.id === user?.id));
+        setIsHost(data.isHost || false);
+        if (data.place) {
+          const placeData = explorationPlaces.find(p => p.id === data.place.id);
+          if (placeData) setSelectedPlace(placeData);
+          setRoomPhase('difficultySelect');
+          if (data.isHost) {
+            addLog('🌐 Host: Select difficulty and start exploration.');
+          } else {
+            addLog(`🌐 Room joined. Waiting for host to start.`);
+          }
+        } else {
+          setRoomPhase('placeSelect');
+          setIsWaitingForHost(!data.isHost);
+        }
+        addLog(`🌐 Players: ${data.players.map((p: any) => p.name).join(', ')}`);
+        break;
+
+      case 'explorationStarted':
+        const placeData = explorationPlaces.find(p => p.id === data.placeId);
+        if (!placeData) {
+          addLog('⚠️ Place not found.');
+          return;
+        }
+        setSelectedPlace(placeData);
+        setSelectedDifficulty(data.difficulty);
+        setIdentityStates(data.identityStates);
+        if (data.identityStates.length > 0) data.identityStates[0].isActive = true;
+        setActiveIdentityIndex(0);
+        setEnemies(data.enemies);
+        setPhase('exploring');
+        setTurn('player');
+        setSelectedSkillIndex(0);
+        setSelectedEnemyIndex(0);
+        setLog(data.log || [`🗺️ Exploring: ${placeData.name} (${data.difficulty})`]);
+        if (data.log && data.log.length > 0) {
+          data.log.forEach((l: string) => addLog(l));
+        }
+        setRoomPhase('exploring');
+        break;
+
+      case 'explorationStateUpdate':
+        setIdentityStates(data.identityStates);
+        setEnemies(data.enemies);
+        setTurn(data.turn);
+        setActiveIdentityIndex(data.activeIdentityIndex);
+        setClashData(data.clashData || null);
+        setLog(data.log);
+        break;
+
+      case 'explorationFinished':
+        setFinalScore(data.score);
+        setPhase('victory');
+        setIsCombatFinished(true);
+        addLog(`🏆 Exploration complete! Score: ${data.score}`);
+        break;
+
+      case 'explorationDefeat':
+        setPhase('defeat');
+        setIsCombatFinished(true);
+        addLog('💀 All identities defeated. Exploration failed.');
+        break;
+
+      case 'explorationError':
+        alert(`❌ ${data.message}`);
+        break;
+
+      case 'explorationDisbanded':
+        alert('The room has been disbanded by the host.');
+        resetExploration();
+        break;
+
+      default:
+        console.log('Unhandled WebSocket message:', data);
+    }
+  };
+
   // ─── Co-op: Create/Join room ──────────────────────────────────────
   const createRoom = (placeId: string) => {
     if (!selectedCoopIdentityId) {
       addLog('⚠️ Please select an identity first.');
       return;
     }
-    if (!socketRef.current) {
-      const newSocket = io(SERVER_URL);
-      socketRef.current = newSocket;
-      setupSocketListeners(newSocket);
-    }
-    const identityData = buildIdentityState(selectedCoopIdentityId, getDisplayName(user), store);
-    if (!identityData) {
+    const identityState = buildIdentityState(selectedCoopIdentityId, getDisplayName(user), store);
+    if (!identityState) {
       addLog('⚠️ Could not build identity data.');
       return;
     }
-    socketRef.current.emit('createExplorationRoom', {
-      placeId,
-      playerName: getDisplayName(user),
-      identityData,
-    });
+    const roomId = crypto.randomUUID().slice(0, 8);
+    setRoomId(roomId);
+    setIsHost(true);
+    setRoomPhase('placeSelect');
+    connectWebSocket(roomId);
   };
 
   const joinRoom = (roomId: string) => {
@@ -471,124 +627,22 @@ export default function ExplorationView() {
       addLog('⚠️ Please select an identity first.');
       return;
     }
-    if (!socketRef.current) {
-      const newSocket = io(SERVER_URL);
-      socketRef.current = newSocket;
-      setupSocketListeners(newSocket);
-    }
-    const identityData = buildIdentityState(selectedCoopIdentityId, getDisplayName(user), store);
-    if (!identityData) {
-      addLog('⚠️ Could not build identity data.');
-      return;
-    }
-    socketRef.current.emit('joinExplorationRoom', {
-      roomId,
-      playerName: getDisplayName(user),
-      identityData,
-    });
+    setRoomId(roomId);
+    connectWebSocket(roomId);
   };
 
   const startExploration = () => {
-    if (!socketRef.current || !roomId || !selectedPlace || !selectedDifficulty) return;
-    socketRef.current.emit('startExploration', {
-      roomId,
+    if (!roomId || !selectedPlace || !selectedDifficulty) return;
+    sendAction('startExploration', {
       placeId: selectedPlace.id,
       difficulty: selectedDifficulty,
     });
   };
 
   const disbandRoom = () => {
-    if (isHost && socketRef.current) {
-      socketRef.current.emit('disbandExplorationRoom', { roomId });
+    if (isHost) {
+      sendAction('disbandExplorationRoom', {});
     }
-  };
-
-  const setupSocketListeners = (socket: any) => {
-    socket.on('explorationRoomCreated', ({ roomId, place, players: pList, isHost: host }) => {
-      setRoomId(roomId);
-      setPlayers(pList);
-      setMyPlayerIndex(pList.findIndex((p: any) => p.id === user.id));
-      setIsHost(host);
-      setSelectedPlace(null);
-      setRoomPhase('placeSelect');
-      setIsWaitingForHost(false);
-      addLog(`🌐 Room created. You are the host. Select a place and difficulty.`);
-    });
-
-    socket.on('explorationRoomJoined', ({ roomId, players: pList, place, isHost: host }) => {
-      setRoomId(roomId);
-      setPlayers(pList);
-      setMyPlayerIndex(pList.findIndex((p: any) => p.id === user.id));
-      setIsHost(host || false);
-      if (place) {
-        const placeData = explorationPlaces.find(p => p.id === place.id);
-        if (placeData) setSelectedPlace(placeData);
-        setRoomPhase('difficultySelect');
-        if (isHost) {
-          addLog('🌐 Host: Select difficulty and start exploration.');
-        } else {
-          addLog(`🌐 Room joined. Waiting for host to start.`);
-        }
-      } else {
-        setRoomPhase('placeSelect');
-        setIsWaitingForHost(!host);
-      }
-      addLog(`🌐 Players: ${pList.map((p: any) => p.name).join(', ')}`);
-    });
-
-    socket.on('explorationStarted', ({ placeId, difficulty, identityStates: states, enemies: enemyList, log: logs }) => {
-      const placeData = explorationPlaces.find(p => p.id === placeId);
-      if (!placeData) {
-        addLog('⚠️ Place not found.');
-        return;
-      }
-      setSelectedPlace(placeData);
-      setSelectedDifficulty(difficulty);
-      setIdentityStates(states);
-      if (states.length > 0) states[0].isActive = true;
-      setActiveIdentityIndex(0);
-      setEnemies(enemyList);
-      setPhase('exploring');
-      setTurn('player');
-      setSelectedSkillIndex(0);
-      setSelectedEnemyIndex(0);
-      setLog(logs || [`🗺️ Exploring: ${placeData.name} (${difficulty})`]);
-      if (logs && logs.length > 0) {
-        logs.forEach((l: string) => addLog(l));
-      }
-      setRoomPhase('exploring');
-    });
-
-    socket.on('explorationStateUpdate', (state: any) => {
-      setIdentityStates(state.identityStates);
-      setEnemies(state.enemies);
-      setTurn(state.turn);
-      setActiveIdentityIndex(state.activeIdentityIndex);
-      setClashData(state.clashData || null);
-      setLog(state.log);
-    });
-
-    socket.on('explorationFinished', (result: any) => {
-      setFinalScore(result.score);
-      setPhase('victory');
-      setIsCombatFinished(true);
-      addLog(`🏆 Exploration complete! Score: ${result.score}`);
-    });
-
-    socket.on('explorationDefeat', () => {
-      setPhase('defeat');
-      setIsCombatFinished(true);
-      addLog('💀 All identities defeated. Exploration failed.');
-    });
-
-    socket.on('explorationError', (err: any) => {
-      alert(`❌ ${err.message}`);
-    });
-
-    socket.on('explorationDisbanded', () => {
-      alert('The room has been disbanded by the host.');
-      resetExploration();
-    });
   };
 
   // ─── Add log helper ──────────────────────────────────────────────
@@ -799,11 +853,8 @@ export default function ExplorationView() {
     }
 
     setTurn('resolve');
-    if (gameMode === 'coop' && socketRef.current) {
-      socketRef.current.emit('explorationAction', {
-        roomId,
-        playerId: user.id,
-        action: 'playerAction',
+    if (gameMode === 'coop' && wsRef.current) {
+      sendAction('playerAction', {
         selectedSkillIndex,
         selectedEnemyIndex,
       });
@@ -864,16 +915,16 @@ export default function ExplorationView() {
         addLog(`💰 Gained ${totalLunacy}⚡ Enkephalin, ${totalExp}🌟 Manager EXP${threads > 0 ? `, ${threads}🧵 Threads` : ''}${sigils > 0 ? `, ${sigils}💎 Sigils` : ''}${eclipse > 0 ? `, ${eclipse}✨ Eclipse Mats` : ''}!`);
         setRewardsClaimed(true);
         setTurn('finished');
-        if (gameMode === 'coop' && socketRef.current) {
-          socketRef.current.emit('explorationFinished', { roomId, score: finalScore });
+        if (gameMode === 'coop' && wsRef.current) {
+          sendAction('explorationFinished', { score: finalScore });
         }
         return;
       }
     }
 
     setTurn('enemy');
-    if (gameMode === 'coop' && socketRef.current) {
-      socketRef.current.emit('explorationAction', { roomId, playerId: user.id, action: 'enemyTurn' });
+    if (gameMode === 'coop' && wsRef.current) {
+      sendAction('resolve', {});
     }
     setTimeout(() => {
       executeEnemyTurn();
@@ -968,6 +1019,9 @@ export default function ExplorationView() {
       return;
     }
     addLog('🏳️ You retreated from the exploration.');
+    if (gameMode === 'coop' && wsRef.current) {
+      sendAction('retreat', {});
+    }
     resetExploration();
   };
 
@@ -982,10 +1036,9 @@ export default function ExplorationView() {
     setIsCombatFinished(false);
     setRewardsClaimed(false);
     setFinalScore(null);
-    if (gameMode === 'coop' && socketRef.current) {
-      socketRef.current.emit('leaveExplorationRoom', { roomId });
-      socketRef.current.disconnect();
-      socketRef.current = null;
+    if (gameMode === 'coop' && wsRef.current) {
+      sendAction('leaveExplorationRoom', {});
+      disconnectWebSocket();
     }
     setIsHost(false);
     setRoomId(null);
@@ -1036,6 +1089,8 @@ export default function ExplorationView() {
                           addLog('⚠️ You can only select up to 3 identities.');
                           return;
                         }
+                        // Update team in store
+                        useGameStore.setState({ team: newTeam });
                       }}
                       className={`px-3 py-1 text-xs font-mono border transition-all ${isSelected ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400 hover:border-cyan-400/50'}`}
                       style={{ clipPath: 'polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px))' }}
