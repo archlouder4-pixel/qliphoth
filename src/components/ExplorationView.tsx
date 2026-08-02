@@ -1,5 +1,5 @@
 // ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op)
-// Added: custom room codes, global chat (visible only in co‑op), solo difficulty UI overlay.
+// Now with Global Chat (visible only in co‑op mode)
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import {
