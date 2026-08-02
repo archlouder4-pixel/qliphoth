@@ -539,7 +539,7 @@ export default function NormalReception({
       let weaponId = owned.equippedWeaponId || null;
       // Arthur forced equip
       if (data.id === 'arthur_excalibur') {
-        const targetWeaponId = data.signatureWeaponId || 'eclipse_blade';
+        const targetWeaponId = data.signatureWeaponId || 'excalibur_greatsword';
         if (canEquipWeapon(data.id, targetWeaponId)) {
           const ownedWeapon = ownedWeapons.find((ow) => ow.weaponId === targetWeaponId);
           if (ownedWeapon) {
