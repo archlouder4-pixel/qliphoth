@@ -1,4 +1,5 @@
-// ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op) with native WebSocket
+// ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op)
+// Added: custom room codes, global chat (visible only in co‑op), solo difficulty UI overlay.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import {
@@ -29,12 +30,12 @@ import { explorationEnemies, type ExplorationEnemy as RawExplorationEnemy } from
 import { DEPARTMENTS } from '../data/departments';
 import { getDisplayName } from '../auth/discord';
 import { useAuth } from '../auth/AuthContext';
+import GlobalChat from '../components/GlobalChat';
 
 const MAX_CLASH_POWER = 50;
 const ULTIMATE_GAIN_MIN = 0.003;
 const ULTIMATE_GAIN_MAX = 0.03;
 const MAX_PLAYERS = 3;
-// Use environment variable for backend URL (default for production)
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
 interface ExplorationEnemy extends RawExplorationEnemy {
@@ -81,7 +82,6 @@ interface IdentityState {
   hasLeaderSkill: boolean;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────
 function rand(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -132,24 +132,24 @@ function computeDepartmentBonus(facility: any): {
 
 function convertRawEnemy(raw: RawExplorationEnemy, place?: any, difficulty?: string): ExplorationEnemy {
   const elementToDmg: Record<string, string> = {
-    'Physical': 'Red',
-    'Light': 'White',
-    'Dark': 'Black',
-    'Void': 'Pale',
-    'Fire': 'Red',
-    'Water': 'Pale',
-    'Chaos': 'Black',
-    'Spectro': 'White',
+    Physical: 'Red',
+    Light: 'White',
+    Dark: 'Black',
+    Void: 'Pale',
+    Fire: 'Red',
+    Water: 'Pale',
+    Chaos: 'Black',
+    Spectro: 'White',
   };
   const resistToInf: Record<string, string> = {
-    'Physical': 'Blunt',
-    'Light': 'Pierce',
-    'Dark': 'Slash',
-    'Void': 'Pierce',
-    'Fire': 'Slash',
-    'Water': 'Pierce',
-    'Chaos': 'Blunt',
-    'Spectro': 'Slash',
+    Physical: 'Blunt',
+    Light: 'Pierce',
+    Dark: 'Slash',
+    Void: 'Pierce',
+    Fire: 'Slash',
+    Water: 'Pierce',
+    Chaos: 'Blunt',
+    Spectro: 'Slash',
   };
   const damageType = elementToDmg[raw.element] || 'Red';
   const infusion = resistToInf[raw.resist] || 'Slash';
@@ -166,9 +166,9 @@ function convertRawEnemy(raw: RawExplorationEnemy, place?: any, difficulty?: str
   }));
 
   const diffMultipliers: Record<string, { hp: number; atk: number; def: number }> = {
-    'Easy': { hp: 0.7, atk: 0.7, def: 0.7 },
-    'Normal': { hp: 1.0, atk: 1.0, def: 1.0 },
-    'Hard': { hp: 1.4, atk: 1.3, def: 1.3 },
+    Easy: { hp: 0.7, atk: 0.7, def: 0.7 },
+    Normal: { hp: 1.0, atk: 1.0, def: 1.0 },
+    Hard: { hp: 1.4, atk: 1.3, def: 1.3 },
     'Very Hard': { hp: 1.8, atk: 1.6, def: 1.6 },
   };
   const scale = diffMultipliers[difficulty || 'Normal'] || diffMultipliers['Normal'];
@@ -195,7 +195,6 @@ function convertRawEnemy(raw: RawExplorationEnemy, place?: any, difficulty?: str
   };
 }
 
-// ─── Build identity state from store ──────────────────────────────
 function buildIdentityState(
   identityId: string,
   playerName: string,
@@ -283,7 +282,6 @@ function buildIdentityState(
   };
 }
 
-// ─── Main Component ──────────────────────────────────────────────────
 export default function ExplorationView() {
   const { user } = useAuth();
   const store = useGameStore();
@@ -301,11 +299,9 @@ export default function ExplorationView() {
     addEclipseResonanceMaterials,
   } = store;
 
-  // ─── WebSocket ref ───────────────────────────────────────────────────
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
 
-  // ─── Game mode state ──────────────────────────────────────────────
   const [gameMode, setGameMode] = useState<'solo' | 'coop'>('solo');
   const [isHost, setIsHost] = useState(false);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -320,7 +316,10 @@ export default function ExplorationView() {
   const [roomPhase, setRoomPhase] = useState<'lobby' | 'placeSelect' | 'difficultySelect' | 'exploring'>('lobby');
   const [isWaitingForHost, setIsWaitingForHost] = useState(false);
 
-  // ─── Combat state ──────────────────────────────────────────────────
+  // Solo difficulty selector UI
+  const [showDifficultySelector, setShowDifficultySelector] = useState(false);
+  const [pendingPlace, setPendingPlace] = useState<any>(null);
+
   const [phase, setPhase] = useState<'lobby' | 'exploring' | 'waveClear' | 'victory' | 'defeat'>('lobby');
   const [currentWaveIndex, setCurrentWaveIndex] = useState(0);
   const [enemies, setEnemies] = useState<ExplorationEnemy[]>([]);
@@ -343,7 +342,6 @@ export default function ExplorationView() {
   const [rewardsClaimed, setRewardsClaimed] = useState(false);
   const [finalScore, setFinalScore] = useState<number | null>(null);
 
-  // ─── Derived ──────────────────────────────────────────────────────
   const activeIdentity = identityStates[activeIdentityIndex] || null;
   const activeSkills = activeIdentity
     ? activeIdentity.transformationActive && activeIdentity.transformedSkills.length > 0
@@ -353,7 +351,6 @@ export default function ExplorationView() {
 
   const deptBonus = computeDepartmentBonus(facility);
 
-  // ─── Detect synergy ──────────────────────────────────────────────
   const detectSynergy = (states: IdentityState[]) => {
     const classes = states.map((s) => s.classCategory);
     const hasAttacker = classes.includes('Attacker');
@@ -381,7 +378,6 @@ export default function ExplorationView() {
     return { atkBuff, defBuff, healBonus, dmgAmp, type };
   };
 
-  // ─── Start exploration (solo) ────────────────────────────────────
   const startSoloExploration = (place: any, selectedIds: string[], difficulty: string = 'Normal') => {
     const states = selectedIds
       .map((id) => {
@@ -423,6 +419,8 @@ export default function ExplorationView() {
     setFinalScore(null);
     setRewardsClaimed(false);
     setIsCombatFinished(false);
+    setShowDifficultySelector(false);
+    setPendingPlace(null);
 
     const wave = place.waves[0];
     const waveEnemies = wave.enemies
@@ -445,7 +443,6 @@ export default function ExplorationView() {
     }
   };
 
-  // ─── Co-op: WebSocket helpers ──────────────────────────────────────
   const connectWebSocket = (roomId: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
     const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
@@ -454,7 +451,6 @@ export default function ExplorationView() {
 
     ws.onopen = () => {
       console.log('WebSocket connected to exploration room');
-      // Send join message
       const identityState = buildIdentityState(selectedCoopIdentityId, getDisplayName(user), store);
       if (!identityState) {
         addLog('⚠️ Could not build identity state.');
@@ -510,7 +506,6 @@ export default function ExplorationView() {
     }
   };
 
-  // ─── Handle incoming WebSocket messages ──────────────────────────
   const handleWebSocketMessage = (data: any) => {
     switch (data.type) {
       case 'explorationRoomCreated':
@@ -604,8 +599,7 @@ export default function ExplorationView() {
     }
   };
 
-  // ─── Co-op: Create/Join room ──────────────────────────────────────
-  const createRoom = (placeId: string) => {
+  const createRoom = (placeId: string, customRoomId?: string) => {
     if (!selectedCoopIdentityId) {
       addLog('⚠️ Please select an identity first.');
       return;
@@ -615,7 +609,7 @@ export default function ExplorationView() {
       addLog('⚠️ Could not build identity data.');
       return;
     }
-    const roomId = crypto.randomUUID().slice(0, 8);
+    const roomId = customRoomId || crypto.randomUUID().slice(0, 8);
     setRoomId(roomId);
     setIsHost(true);
     setRoomPhase('placeSelect');
@@ -645,10 +639,8 @@ export default function ExplorationView() {
     }
   };
 
-  // ─── Add log helper ──────────────────────────────────────────────
   const addLog = (msg: string) => setLog((prev) => [...prev.slice(-30), msg]);
 
-  // ─── Combat actions ──────────────────────────────────────────────
   const handlePlayerAction = () => {
     if (turn !== 'player' || isCombatFinished) return;
     const active = identityStates[activeIdentityIndex];
@@ -723,7 +715,6 @@ export default function ExplorationView() {
         )
       );
 
-      // Class effects
       if (active.classCategory === 'Attacker' && isEgo) {
         setIdentityStates((prev) =>
           prev.map((s) =>
@@ -775,7 +766,6 @@ export default function ExplorationView() {
         addLog(`💚 Support Ego: all allies healed for ${healAmt} HP (${(healPct * 100).toFixed(0)}% of damage)`);
       }
 
-      // Transformation via ultimate
       if (isEgo) {
         const identity = identities.find((i) => i.id === active.identityId);
         if (identity && identity.transformedSkills?.length > 0) {
@@ -861,7 +851,6 @@ export default function ExplorationView() {
     }
   };
 
-  // ─── Resolve phase ────────────────────────────────────────────────
   const resolvePhase = () => {
     const aliveEnemies = enemies.filter((e) => e.currentHp > 0);
     if (aliveEnemies.length === 0) {
@@ -1036,6 +1025,8 @@ export default function ExplorationView() {
     setIsCombatFinished(false);
     setRewardsClaimed(false);
     setFinalScore(null);
+    setShowDifficultySelector(false);
+    setPendingPlace(null);
     if (gameMode === 'coop' && wsRef.current) {
       sendAction('leaveExplorationRoom', {});
       disconnectWebSocket();
@@ -1045,7 +1036,27 @@ export default function ExplorationView() {
     setPlayers([]);
   };
 
-  // ─── Render: Lobby ──────────────────────────────────────────────────
+  const handlePlaceClick = (place: any) => {
+    if (team.length === 0) {
+      addLog('⚠️ Select at least one identity first.');
+      return;
+    }
+    setPendingPlace(place);
+    setShowDifficultySelector(true);
+  };
+
+  const selectDifficulty = (difficulty: string) => {
+    if (pendingPlace) {
+      startSoloExploration(pendingPlace, team, difficulty);
+    }
+  };
+
+  const cancelDifficultySelection = () => {
+    setShowDifficultySelector(false);
+    setPendingPlace(null);
+  };
+
+  // ─── RENDER: LOBBY ──────────────────────────────────────────────────
   if (phase === 'lobby' && roomPhase === 'lobby') {
     return (
       <div className="space-y-4 max-w-4xl mx-auto">
@@ -1089,7 +1100,6 @@ export default function ExplorationView() {
                           addLog('⚠️ You can only select up to 3 identities.');
                           return;
                         }
-                        // Update team in store
                         useGameStore.setState({ team: newTeam });
                       }}
                       className={`px-3 py-1 text-xs font-mono border transition-all ${isSelected ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400 hover:border-cyan-400/50'}`}
@@ -1107,17 +1117,7 @@ export default function ExplorationView() {
               {explorationPlaces.map((place) => (
                 <div
                   key={place.id}
-                  onClick={() => {
-                    if (team.length === 0) {
-                      addLog('⚠️ Select at least one identity first.');
-                      return;
-                    }
-                    // Show difficulty selection via a simple modal
-                    // We'll use a prompt for simplicity; in full UI we'd use a modal
-                    const diff = prompt('Select difficulty: Easy, Normal, Hard, Very Hard', 'Normal');
-                    const difficulty = diff && ['Easy', 'Normal', 'Hard', 'Very Hard'].includes(diff) ? diff : 'Normal';
-                    startSoloExploration(place, team, difficulty);
-                  }}
+                  onClick={() => handlePlaceClick(place)}
                   className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg cursor-pointer hover:border-cyan-400 transition-all"
                 >
                   <div className="flex items-start gap-3">
@@ -1164,41 +1164,86 @@ export default function ExplorationView() {
                 })}
               </select>
             </div>
-            <div className="flex gap-4 flex-wrap">
-              <button
-                onClick={() => {
-                  if (!selectedCoopIdentityId) {
-                    addLog('⚠️ Please select an identity first.');
-                    return;
-                  }
-                  createRoom(explorationPlaces[0]?.id || '');
-                }}
-                className="px-6 py-3 bg-cyan-400/20 border border-cyan-400 text-cyan-400 font-mono font-bold hover:bg-cyan-400 hover:text-gray-900 transition-all"
-                style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
-              >
-                🏠 CREATE ROOM
-              </button>
-              <input
-                type="text"
-                placeholder="Room Code"
-                className="bg-gray-800 border border-gray-700 px-4 py-2 text-white focus:border-cyan-400 outline-none rounded"
-                style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const code = (e.target as HTMLInputElement).value.trim();
-                    if (code) joinRoom(code);
-                  }
-                }}
-              />
+            <div className="flex flex-col gap-3">
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  placeholder="Room Code (empty = auto-generate)"
+                  className="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 text-white focus:border-cyan-400 outline-none rounded"
+                  id="explorationRoomCodeInput"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const input = e.target as HTMLInputElement;
+                      const code = input.value.trim();
+                      if (code) {
+                        joinRoom(code);
+                      } else {
+                        createRoom(explorationPlaces[0]?.id || '');
+                      }
+                    }
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    const input = document.getElementById('explorationRoomCodeInput') as HTMLInputElement;
+                    const code = input.value.trim();
+                    if (code) {
+                      joinRoom(code);
+                    } else {
+                      createRoom(explorationPlaces[0]?.id || '');
+                    }
+                  }}
+                  className="px-4 py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
+                >
+                  Join / Create
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">If you leave code empty, a random one will be generated.</p>
+              {roomId && (
+                <p className="text-xs text-cyan-400">Room Code: <span className="font-mono font-bold">{roomId}</span></p>
+              )}
             </div>
-            <p className="text-xs text-gray-500 mt-2">Co-op: each player selects one identity from their collection.</p>
+          </div>
+        )}
+
+        {showDifficultySelector && pendingPlace && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="bg-gray-900 border border-cyan-500/30 p-6 rounded-lg max-w-md w-full">
+              <h3 className="text-lg font-bold text-cyan-400 mb-2">⚙️ SELECT DIFFICULTY</h3>
+              <p className="text-sm text-gray-400 mb-4">
+                Choose difficulty for <span className="text-white font-bold">{pendingPlace.name}</span>
+              </p>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                {['Easy', 'Normal', 'Hard', 'Very Hard'].map((diff) => (
+                  <button
+                    key={diff}
+                    onClick={() => selectDifficulty(diff)}
+                    className={`p-3 border transition-all ${difficultyColor(diff)} hover:border-cyan-400 hover:bg-cyan-400/10`}
+                    style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px))' }}
+                  >
+                    <div className="text-sm font-bold">{diff}</div>
+                    <div className="text-[10px] text-gray-500">
+                      {diff === 'Easy' ? 'Relaxed' : diff === 'Normal' ? 'Standard' : diff === 'Hard' ? 'Challenging' : 'Brutal'}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={cancelDifficultySelection}
+                  className="px-4 py-2 border border-gray-600 text-gray-400 rounded hover:border-red-400 hover:text-red-400 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
     );
   }
 
-  // ─── Render: Room lobby – place selection & difficulty ────────────
+  // ─── RENDER: CO-OP ROOM LOBBY ──────────────────────────────────────
   if (roomPhase === 'placeSelect' || roomPhase === 'difficultySelect') {
     const isPlaceSelect = roomPhase === 'placeSelect';
     return (
@@ -1342,7 +1387,7 @@ export default function ExplorationView() {
     );
   }
 
-  // ─── Combat / Exploring View ──────────────────────────────────────
+  // ─── RENDER: COMBAT / EXPLORING ──────────────────────────────────
   if (phase === 'exploring' || phase === 'waveClear' || phase === 'victory' || phase === 'defeat') {
     const isFinished = phase === 'victory' || phase === 'defeat';
     return (
