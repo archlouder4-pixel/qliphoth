@@ -15,7 +15,7 @@ type Env = {
   COMPETITIVE_ROOM: DurableObjectNamespace;
   EXPLORATION_ROOM: DurableObjectNamespace;
   GLOBAL_CHAT: DurableObjectNamespace;
-  DB: D1Database; // optional, if you have D1
+  DB: D1Database;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -55,35 +55,76 @@ app.get('/global', async (c) => {
   return stub.fetch(c.req.raw);
 });
 
-// ─── Competitive / Sync Stub Endpoints ────────────────────────
-// These are used by the frontend competitive API.
-// They return success to avoid 404 errors while offline mode handles actual persistence.
+// ─── Player Sync Endpoints ─────────────────────────────────────
 
+// This is the specific route the frontend calls:
+app.post('/api/player/sync', async (c) => {
+  // Return a sample player object so the sync succeeds.
+  // In a real implementation, you'd save the data to D1.
+  return c.json({
+    success: true,
+    player: {
+      id: 'current_user',
+      name: 'Player',
+      score: 12500,
+      lives: 5,
+      wins: 10,
+      losses: 3,
+      region: 'NA',
+      squad: 'Amateur',
+      merit: 50,
+      reputation: 1,
+    },
+  });
+});
+
+// ─── Other Competitive / Sync Stub Endpoints ─────────────────
 app.post('/api/sync', async (c) => {
-  // Frontend syncs player data (score, region, etc.)
-  // We just acknowledge to avoid 404.
   return c.json({ success: true, message: 'Sync accepted (stub)' });
 });
 
 app.post('/api/region', async (c) => {
-  // Frontend sets the player region.
-  // If you want to persist, you could use D1 here.
   return c.json({ success: true });
 });
 
 app.post('/api/score', async (c) => {
-  // Frontend submits a score.
   return c.json({ success: true });
 });
 
 app.post('/api/bracket', async (c) => {
-  // For fetching bracket data – we can return mock or forward to CompetitiveRoom?
-  // We'll return a stub.
-  return c.json({ entries: [] });
+  // Sample bracket data
+  const sampleBracket = [
+    { rank: 1, userId: 'user_1', name: 'PlayerOne', score: 12500, isGuest: false },
+    { rank: 2, userId: 'user_2', name: 'ShadowStrike', score: 11200, isGuest: false },
+    { rank: 3, userId: 'user_3', name: 'LunarBlade', score: 9800, isGuest: false },
+    { rank: 4, userId: 'user_4', name: 'CrimsonReaper', score: 8700, isGuest: false },
+    { rank: 5, userId: 'user_5', name: 'EclipseSage', score: 7600, isGuest: false },
+    { rank: 6, userId: 'user_6', name: 'VoidWalker', score: 6500, isGuest: false },
+    { rank: 7, userId: 'user_7', name: 'Dawnbreaker', score: 5400, isGuest: false },
+    { rank: 8, userId: 'user_8', name: 'Frostbite', score: 4300, isGuest: false },
+    { rank: 9, userId: 'user_9', name: 'Nightshade', score: 3200, isGuest: false },
+    { rank: 10, userId: 'user_10', name: 'StellarForge', score: 2100, isGuest: false },
+  ];
+  return c.json({ entries: sampleBracket });
 });
 
 app.post('/api/ranking', async (c) => {
-  return c.json({ top: [], playerEntry: null });
+  const sampleTop = [
+    { rank: 1, userId: 'user_1', name: 'PlayerOne', score: 12500, percentile: 'Top 1%' },
+    { rank: 2, userId: 'user_2', name: 'ShadowStrike', score: 11200, percentile: 'Top 2%' },
+    { rank: 3, userId: 'user_3', name: 'LunarBlade', score: 9800, percentile: 'Top 3%' },
+    { rank: 4, userId: 'user_4', name: 'CrimsonReaper', score: 8700, percentile: 'Top 5%' },
+    { rank: 5, userId: 'user_5', name: 'EclipseSage', score: 7600, percentile: 'Top 7%' },
+  ];
+  const samplePlayer = {
+    rank: 3,
+    userId: 'current_user',
+    name: 'You',
+    score: 9800,
+    isGuest: false,
+    percentile: 'Top 3%',
+  };
+  return c.json({ top: sampleTop, playerEntry: samplePlayer });
 });
 
 // ─── Health Check ──────────────────────────────────────────────
