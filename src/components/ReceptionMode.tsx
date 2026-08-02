@@ -1,5 +1,5 @@
 // ReceptionMode.tsx – 1v1 Duel with WebSocket
-// Fixed: "Find Match" button now works reliably.
+// Added: global chat (visible only during combat/result), custom WebSocket integration, fixed "Find Match" button.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -18,6 +18,7 @@ import {
 import { weapons, canEquipWeapon } from '../data/weapons';
 import { egoGifts } from '../data/egoGifts';
 import { applyWeaponPassive } from '../data/weaponPassives';
+import GlobalChat from '../components/GlobalChat';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
@@ -442,7 +443,7 @@ export default function ReceptionMode({
     let weaponId = owned.equippedWeaponId || null;
 
     if (identityId === 'arthur_excalibur') {
-      const targetWeaponId = 'eclipse_blade';
+      const targetWeaponId = 'excalibur_greatsword';
       if (canEquipWeapon(identityId, targetWeaponId)) {
         const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
         if (ownedWeapon) {
@@ -636,11 +637,11 @@ export default function ReceptionMode({
       const owned = store.ownedIdentities.find(o => o.identityId === identityId);
       if (!owned) return 'None';
       let weaponId = owned.equippedWeaponId;
-      if (identityId === 'arthur_excalibur' && weaponId !== 'eclipse_blade') {
-        const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === 'eclipse_blade');
-        if (ownedWeapon && canEquipWeapon(identityId, 'eclipse_blade')) {
-          store.setEquippedWeapon(identityId, 'eclipse_blade');
-          weaponId = 'eclipse_blade';
+      if (identityId === 'arthur_excalibur' && weaponId !== 'excalibur_greatsword') {
+        const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === 'excalibur_greatsword');
+        if (ownedWeapon && canEquipWeapon(identityId, 'excalibur_greatsword')) {
+          store.setEquippedWeapon(identityId, 'excalibur_greatsword');
+          weaponId = 'excalibur_greatsword';
         }
       }
       if (!weaponId) return 'None';
