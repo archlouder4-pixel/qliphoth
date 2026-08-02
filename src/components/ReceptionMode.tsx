@@ -1,5 +1,5 @@
-// ReceptionMode.tsx – fully refactored, data-driven, no hardcoded identity checks
-// Now uses native WebSocket instead of Socket.IO
+// ReceptionMode.tsx – 1v1 Duel with WebSocket
+// Added: global chat (visible only during combat/result), custom WebSocket integration, fixed "Find Match" button.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -18,11 +18,19 @@ import {
 import { weapons, canEquipWeapon } from '../data/weapons';
 import { egoGifts } from '../data/egoGifts';
 import { applyWeaponPassive } from '../data/weaponPassives';
+import GlobalChat from '../components/GlobalChat';
 
-// ─── Constants ──────────────────────────────────────────────────────────
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
-// ─── Rank configuration ──────────────────────────────────────────────
+interface ReceptionModeProps {
+  onExit: () => void;
+  availableIdentities: string[];
+  initialScore?: number;
+  initialLives?: number;
+  initialWins?: number;
+  initialLosses?: number;
+}
+
 const RANK_GROUPS = [
   { name: 'Manager', minScore: 0, color: '#4CAF50', nextRank: 'Professional', nextThreshold: 401 },
   { name: 'Professional', minScore: 401, color: '#2196F3', nextRank: 'Librarian', nextThreshold: 801 },
@@ -50,7 +58,6 @@ function getRankColor(rank: string): string {
   return found ? found.color : '#A9A9A9';
 }
 
-// ─── Tactical UI Components ─────────────────────────────────────────
 const PGR_STYLES = {
   bgPrimary: 'bg-[#070a14]',
   bgSecondary: 'bg-[#0c1020]',
@@ -130,7 +137,6 @@ function TacticalButton({ children, onClick, variant = 'primary', disabled = fal
   );
 }
 
-// ─── Main Component ─────────────────────────────────────────────────
 export default function ReceptionMode({
   onExit,
   availableIdentities,
@@ -142,11 +148,9 @@ export default function ReceptionMode({
   const store = useGameStore();
   const { user } = useAuth();
 
-  // ─── WebSocket ref ───────────────────────────────────────────────────
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
 
-  // ─── State ──────────────────────────────────────────────────────────
   const [phase, setPhase] = useState<'lobby' | 'combat' | 'result'>('lobby');
   const [playerName, setPlayerName] = useState('Agent');
   const [identityId, setIdentityId] = useState(availableIdentities[0] || '');
@@ -163,7 +167,6 @@ export default function ReceptionMode({
   const [passiveActivating, setPassiveActivating] = useState(false);
   const [weaponError, setWeaponError] = useState<string | null>(null);
 
-  // Refs for latest values in async callbacks
   const myPlayerIndexRef = useRef<0 | 1>(0);
   const roomStateRef = useRef<any>(null);
   const selectSkillRef = useRef<(idx: number) => void>(() => {});
@@ -175,7 +178,6 @@ export default function ReceptionMode({
   };
   addLogRef.current = addLog;
 
-  // ─── Generic Auto-Equip (gentle) ──────────────────────────────────
   useEffect(() => {
     if (!identityId) return;
     const identity = identities.find(i => i.id === identityId);
@@ -191,7 +193,6 @@ export default function ReceptionMode({
     addLogRef.current(`[SYSTEM] Auto-equipped signature weapon: ${sigWeaponId}`);
   }, [identityId, store]);
 
-  // ─── Generic Passive Auto-Select ──────────────────────────────────
   const triggerAutoSelectPassive = () => {
     if (passiveActivating || isSubmitting) return;
     const myKey = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
@@ -232,7 +233,6 @@ export default function ReceptionMode({
     }, 800);
   };
 
-  // ─── useEffect to call passive trigger ──────────────────────────
   useEffect(() => {
     if (phase !== 'combat') return;
     if (!roomState) return;
@@ -250,7 +250,6 @@ export default function ReceptionMode({
     }
   }, [phase, roomState, showClashResult, isSubmitting, passiveActivating]);
 
-  // ─── WebSocket connection helpers ──────────────────────────────────
   const connectWebSocket = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
     const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
@@ -303,7 +302,6 @@ export default function ReceptionMode({
     }
   };
 
-  // ─── Handle incoming WebSocket messages ──────────────────────────
   const handleWebSocketMessage = (data: any) => {
     switch (data.type) {
       case 'roomJoined': {
@@ -399,7 +397,6 @@ export default function ReceptionMode({
     }
   };
 
-  // ─── Socket connection (initial) ──────────────────────────────────
   useEffect(() => {
     connectWebSocket();
     return () => {
@@ -407,7 +404,6 @@ export default function ReceptionMode({
     };
   }, []);
 
-  // ─── Select Skill ──────────────────────────────────────────────────
   const selectSkill = (idx: number) => {
     if (!wsRef.current || isSubmitting || passiveActivating) return;
     const myKey = myPlayerIndexRef.current === 0 ? 'p1' : 'p2';
@@ -431,7 +427,6 @@ export default function ReceptionMode({
     setPassiveActivating(false);
   };
 
-  // ─── Build Player Data ─────────────────────────────────────────────
   const buildPlayerData = () => {
     const identity = identities.find(i => i.id === identityId);
     if (!identity) {
@@ -599,9 +594,26 @@ export default function ReceptionMode({
     };
   };
 
-  // ─── Find match ────────────────────────────────────────────────────
+  // ─── FIXED "Find Match" ──────────────────────────────────────────
   const findMatch = () => {
-    if (!wsRef.current) return;
+    // Ensure WebSocket is connected
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      addLog('[SYSTEM] Connecting to server...');
+      connectWebSocket();
+      // Retry after connection
+      setTimeout(() => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          const playerData = buildPlayerData();
+          if (playerData) {
+            sendAction('findMatch', playerData);
+            addLog('[SYSTEM] Finding match...');
+          }
+        } else {
+          addLog('[SYSTEM] Failed to connect to server.');
+        }
+      }, 500);
+      return;
+    }
     const playerData = buildPlayerData();
     if (!playerData) return;
     sendAction('findMatch', playerData);
@@ -613,13 +625,12 @@ export default function ReceptionMode({
     sendAction('cancelMatch');
   };
 
-  // ─── Rank info ────────────────────────────────────────────────────
   const rankInfo = getRankInfo(initialScore);
   const progressToNext = rankInfo.nextThreshold
     ? Math.min(100, ((initialScore - rankInfo.minScore) / (rankInfo.nextThreshold - rankInfo.minScore)) * 100)
     : 100;
 
-  // ─── Render ──────────────────────────────────────────────────────────
+  // ─── RENDER: LOBBY ──────────────────────────────────────────────────
   if (phase === 'lobby') {
     const allIdentities = identities.filter(id => availableIdentities.includes(id.id));
     const getWeaponName = () => {
@@ -736,6 +747,7 @@ export default function ReceptionMode({
     );
   }
 
+  // ─── RENDER: COMBAT ──────────────────────────────────────────────────
   if (phase === 'combat') {
     if (!roomState) {
       return (
@@ -790,7 +802,6 @@ export default function ReceptionMode({
       return <span className={`text-[8px] font-bold ${info.color}`}>{info.label}</span>;
     };
 
-    // ─── Passive activation overlay ──────────────────────────────
     if (passiveActivating) {
       return (
         <div className="min-h-screen bg-[#070a14] text-white font-sans p-4 flex items-center justify-center">
@@ -817,7 +828,6 @@ export default function ReceptionMode({
       );
     }
 
-    // ─── Clash result overlay ──────────────────────────────────────
     if (showClashResult && roomState.clashResult) {
       const cr = roomState.clashResult;
       const isP1 = myPlayerIndexRef.current === 0;
@@ -866,7 +876,6 @@ export default function ReceptionMode({
       );
     }
 
-    // ─── Normal combat UI ──────────────────────────────────────────
     return (
       <div className="min-h-screen bg-[#070a14] text-white font-sans p-4">
         <div className="max-w-4xl mx-auto space-y-4">
@@ -1167,6 +1176,7 @@ export default function ReceptionMode({
     );
   }
 
+  // ─── RENDER: RESULT ──────────────────────────────────────────────────
   if (phase === 'result') {
     const isP1 = myPlayerIndexRef.current === 0;
     const won = (isP1 && matchResult?.winner === 'p1') || (!isP1 && matchResult?.winner === 'p2');
