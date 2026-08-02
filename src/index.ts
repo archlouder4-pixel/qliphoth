@@ -86,9 +86,6 @@ app.post('/api/ranking', async (c) => {
   return c.json({ top: [], playerEntry: null });
 });
 
-// You can add any other endpoints that might be called by the frontend.
-// For example, if it calls /api/leaderboard, /api/player, etc.
-
 // ─── Health Check ──────────────────────────────────────────────
 app.get('/health', (c) => c.text('OK'));
 
