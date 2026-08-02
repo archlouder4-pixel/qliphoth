@@ -1,5 +1,5 @@
 // DepartmentView.tsx – Co‑op facility management with native WebSocket
-// Added: custom room codes, global chat (visible only in co‑op)
+// Now with Global Chat (visible only in co‑op)
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
