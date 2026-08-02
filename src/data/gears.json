@@ -1,0 +1,357 @@
+{
+  "standard_suit": {
+    "name": "Standard L-Corp Suit",
+    "rank": "ZAYIN",
+    "price": 1,
+    "image": "standardsuit.png",
+    "resistances": {
+      "red": 1.0, "white": 1.0, "black": 1.2, "pale": 1.5,
+      "wrath": 1.0, "lust": 1.0, "sloth": 1.0, "gluttony": 1.0, "gloom": 1.0, "envy": 1.0, "pride": 1.0
+    }
+  },
+  "da_capo": {
+    "name": "Da Capo",
+    "rank": "ALEPH",
+    "price": 15000,
+    "image": "da_caposuit.png",
+    "resistances": {
+      "red": 0.5, "white": 0.2, "black": 0.5, "pale": 1.5,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "mimicry": {
+    "name": "Mimicry",
+    "rank": "ALEPH",
+    "price": 14000,
+    "image": "mimicrysuit.png",
+    "resistances": {
+      "red": 0.2, "white": 0.5, "black": 0.5, "pale": 1.0,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "justitia": {
+    "name": "Justitia",
+    "rank": "ALEPH",
+    "price": 13000,
+    "image": "jussuit.png",
+    "resistances": {
+      "red": 0.5, "white": 0.5, "black": 0.5, "pale": 0.5,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "magicbullet": {
+    "name": "Magic Bullet",
+    "rank": "HE",
+    "price": 7000,
+    "image": "magicbulletsuit.png",
+    "resistances": {
+      "red": 0.7, "white": 0.7, "black": 0.7, "pale": 2.0,
+      "wrath": 0.8, "lust": 0.8, "sloth": 0.8, "gluttony": 0.8, "gloom": 0.8, "envy": 0.8, "pride": 0.8
+    }
+  },
+  "inthenameofloveandhate": {
+    "name": "In The Name Of Love And Hate",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "hatredsuit.png",
+    "resistances": {
+      "red": 0.7, "white": 0.8, "black": 0.4, "pale": 2.0,
+      "wrath": 0.6, "lust": 0.6, "sloth": 0.6, "gluttony": 0.6, "gloom": 0.6, "envy": 0.6, "pride": 0.6
+    }
+  },
+  "solemnlament": {
+    "name": "Solemn Lament",
+    "rank": "HE",
+    "price": 6500,
+    "image": "dripbuttsuit.png",
+    "resistances": {
+      "red": 1.2, "white": 0.8, "black": 0.5, "pale": 1.5,
+      "wrath": 0.8, "lust": 0.8, "sloth": 0.8, "gluttony": 0.8, "gloom": 0.8, "envy": 0.8, "pride": 0.8
+    }
+  },
+  "beak": {
+    "name": "Beak",
+    "rank": "TETH",
+    "price": 4500,
+    "image": "beaksuit.png",
+    "resistances": {
+      "red": 0.7, "white": 0.8, "black": 1.2, "pale": 2.0,
+      "wrath": 0.9, "lust": 0.9, "sloth": 0.9, "gluttony": 0.9, "gloom": 0.9, "envy": 0.9, "pride": 0.9
+    }
+  },
+  "regret": {
+    "name": "Regret",
+    "rank": "TETH",
+    "price": 4000,
+    "image": "regretsuit.png",
+    "resistances": {
+      "red": 0.7, "white": 1.2, "black": 0.8, "pale": 2.0,
+      "wrath": 0.9, "lust": 0.9, "sloth": 0.9, "gluttony": 0.9, "gloom": 0.9, "envy": 0.9, "pride": 0.9
+    }
+  },
+  "soda": {
+    "name": "Soda",
+    "rank": "ZAYIN",
+    "price": 2500,
+    "image": "sodasuit.png",
+    "resistances": {
+      "red": 0.8, "white": 1.0, "black": 1.0, "pale": 2.0,
+      "wrath": 1.0, "lust": 1.0, "sloth": 1.0, "gluttony": 1.0, "gloom": 1.0, "envy": 1.0, "pride": 1.0
+    }
+  },
+  "penitence": {
+    "name": "Penitence",
+    "rank": "ZAYIN",
+    "price": 2000,
+    "image": "penitencesuit.png",
+    "resistances": {
+      "red": 0.9, "white": 0.8, "black": 0.9, "pale": 2.0,
+      "wrath": 1.0, "lust": 1.0, "sloth": 1.0, "gluttony": 1.0, "gloom": 1.0, "envy": 1.0, "pride": 1.0
+    }
+  },
+  "twilight": {
+    "name": "Twilight",
+    "rank": "ALEPH",
+    "price": 55000,
+    "image": "twilightsuit.png",
+    "resistances": {
+      "red": 0.3, "white": 0.3, "black": 0.3, "pale": 0.5,
+      "wrath": 0.3, "lust": 0.3, "sloth": 0.3, "gluttony": 0.3, "gloom": 0.3, "envy": 0.3, "pride": 0.3
+    }
+  },
+  "lamp": {
+    "name": "Lamp",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "lampsuit.png",
+    "resistances": {
+      "red": 0.8, "white": 0.7, "black": 0.4, "pale": 1.5,
+      "wrath": 0.6, "lust": 0.6, "sloth": 0.6, "gluttony": 0.6, "gloom": 0.6, "envy": 0.6, "pride": 0.6
+    }
+  },
+  "hornet": {
+    "name": "Hornet",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "hornetsuit.png",
+    "resistances": {
+      "red": 0.77, "white": 0.7, "black": 0.7, "pale": 1.5,
+      "wrath": 0.6, "lust": 0.6, "sloth": 0.6, "gluttony": 0.6, "gloom": 0.6, "envy": 0.6, "pride": 0.6
+    }
+  },
+  "faint_aroma": {
+    "name": "Faint Aroma",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "faintaromasuit.png",
+    "resistances": {
+      "red": 1.2, "white": 0.6, "black": 0.8, "pale": 1.5,
+      "wrath": 0.6, "lust": 0.6, "sloth": 0.6, "gluttony": 0.6, "gloom": 0.6, "envy": 0.6, "pride": 0.6
+    }
+  },
+  "kod": {
+    "name": "The Sword Sharpened with Tears",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "kodsuit.png",
+    "resistances": {
+      "red": 0.8, "white": 0.8, "black": 0.8, "pale": 0.8,
+      "wrath": 0.6, "lust": 0.6, "sloth": 0.6, "gluttony": 0.6, "gloom": 0.6, "envy": 0.6, "pride": 0.6
+    }
+  },
+  "red_eyes": {
+    "name": "Red Eyes",
+    "rank": "TETH",
+    "price": 4500,
+    "image": "redeyessuit.png",
+    "resistances": {
+      "red": 0.8, "white": 0.8, "black": 0.8, "pale": 2.0,
+      "wrath": 0.9, "lust": 0.9, "sloth": 0.9, "gluttony": 0.9, "gloom": 0.9, "envy": 0.9, "pride": 0.9
+    }
+  },
+  "midsummer": {
+    "name": "Midsummer",
+    "rank": "ALEPH",
+    "price": 15000,
+    "image": "oberonsuit.png",
+    "resistances": {
+      "red": 0.6, "white": 0.6, "black": 0.6, "pale": 0.6,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "smile": {
+    "name": "Smile",
+    "rank": "ALEPH",
+    "price": 15000,
+    "image": "smilesuit.png",
+    "resistances": {
+      "red": 0.5, "white": 0.5, "black": 0.2, "pale": 1.0,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "paradise_lost": {
+    "name": "Paradise Lost",
+    "rank": "ALEPH",
+    "price": 55000,
+    "image": "plsuit.png",
+    "resistances": {
+      "red": 0.2, "white": 0.2, "black": 0.2, "pale": 0.2,
+      "wrath": 0.3, "lust": 0.3, "sloth": 0.3, "gluttony": 0.3, "gloom": 0.3, "envy": 0.3, "pride": 0.3
+    }
+  },
+  "gold_rush": {
+    "name": "Gold Rush",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "goldrushsuit.png",
+    "resistances": {
+      "red": 0.4, "white": 0.7, "black": 0.8, "pale": 2.0,
+      "wrath": 0.6, "lust": 0.6, "sloth": 0.6, "gluttony": 0.6, "gloom": 0.6, "envy": 0.6, "pride": 0.6
+    }
+  },
+  "adoration": {
+    "name": "Adoration",
+    "rank": "ALEPH",
+    "price": 15000,
+    "image": "adorationsuit.png",
+    "resistances": {
+      "red": 0.3, "white": 0.6, "black": 0.3, "pale": 1.0,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "sound_of_star": {
+    "name": "Sound of A Star",
+    "rank": "ALEPH",
+    "price": 15000,
+    "image": "stargear.png",
+    "resistances": {
+      "red": 0.4, "white": 0.4, "black": 0.4, "pale": 1.0,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "our_galaxy": {
+    "name": "Our Galaxy",
+    "rank": "HE",
+    "price": 8000,
+    "image": "galaxy.png",
+    "resistances": {
+      "red": 0.8, "white": 0.8, "black": 1.2, "pale": 1.5,
+      "wrath": 0.8, "lust": 0.8, "sloth": 0.8, "gluttony": 0.8, "gloom": 0.8, "envy": 0.8, "pride": 0.8
+    }
+  },
+  "wrist_cutter": {
+    "name": "Wrist Cutter",
+    "rank": "TETH",
+    "price": 4000,
+    "image": "bloodbathw.png",
+    "resistances": {
+      "red": 1.0, "white": 0.6, "black": 1.2, "pale": 2.0,
+      "wrath": 1.0, "lust": 1.0, "sloth": 1.0, "gluttony": 1.0, "gloom": 1.0, "envy": 1.0, "pride": 1.0
+    }
+  },
+  "legendary_coat": {
+    "name": "Legendary Coat",
+    "rank": "ALEPH",
+    "price": 99999,
+    "image": "legendcoat.png",
+    "eventOnly": true,
+    "resistances": {
+      "red": 0.1, "white": 0.1, "black": 0.1, "pale": 0.2,
+      "wrath": 0.1, "lust": 0.1, "sloth": 0.1, "gluttony": 0.1, "gloom": 0.1, "envy": 0.1, "pride": 0.1
+    }
+  },
+  "dead_silence": {
+    "name": "Dead Silence",
+    "rank": "ALEPH",
+    "price": 13000,
+    "image": "pricesilent.png",
+    "resistances": {
+      "red": 0.4, "white": 0.4, "black": 0.4, "pale": 1.0,
+      "wrath": 0.4, "lust": 0.4, "sloth": 0.4, "gluttony": 0.4, "gloom": 0.4, "envy": 0.4, "pride": 0.4
+    }
+  },
+  "false_throne": {
+    "name": "False Throne",
+    "rank": "ALEPH",
+    "price": 55000,
+    "image": "falsethrony.png",
+    "resistances": {
+      "red": 0.6, "white": 0.4, "black": 0.4, "pale": 0.6,
+      "wrath": 0.2, "lust": 0.2, "sloth": 0.2, "gluttony": 0.3, "gloom": 0.2, "envy": 0.2, "pride": 0.2
+    }
+  },
+  "contempt_awe": {
+    "name": "Contempt, Awe",
+    "rank": "ALEPH",
+    "price": 13250,
+    "image": "awecontempt.png",
+    "resistances": {
+      "red": 0.5, "white": 0.5, "black": 0.5, "pale": 0.5,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "dipsia": {
+    "name": "Dipsia",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "dipsiasuit.png",
+    "resistances": {
+      "red": 0.5, "white": 0.8, "black": 0.8, "pale": 0.8,
+      "wrath": 0.8, "lust": 0.8, "sloth": 0.8, "gluttony": 0.8, "gloom": 0.8, "envy": 0.8, "pride": 0.8
+    }
+  },
+  "censored": {
+    "name": "[CENSORED]",
+    "rank": "ALEPH",
+    "price": 15000,
+    "image": "CENSOREDcool.png",
+    "resistances": {
+      "red": 0.5, "white": 0.2, "black": 0.2, "pale": 0.8,
+      "wrath": 0.5, "lust": 0.5, "sloth": 0.5, "gluttony": 0.5, "gloom": 0.5, "envy": 0.5, "pride": 0.5
+    }
+  },
+  "cobalt_scar": {
+    "name": "Cobalt Scar",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "wolfiesuit.png",
+    "resistances": {
+      "red": 0.4, "white": 0.8, "black": 0.7, "pale": 2.0,
+      "wrath": 0.7, "lust": 0.7, "sloth": 0.7, "gluttony": 0.7, "gloom": 0.7, "envy": 0.7, "pride": 0.7
+    }
+  },
+  "crimson_scar": {
+    "name": "Crimson Scar",
+    "rank": "WAW",
+    "price": 10000,
+    "image": "crimsonscar1.png",
+    "resistances": {
+      "red": 0.6, "white": 0.6, "black": 0.6, "pale": 1.5,
+      "wrath": 0.6, "lust": 0.6, "sloth": 0.6, "gluttony": 0.6, "gloom": 0.6, "envy": 0.6, "pride": 0.6
+    }
+  },
+  "pink": {
+    "name": "Pink",
+    "rank": "ALEPH",
+    "price": 15000,
+    "image": "PinkSuit.png",
+    "resistances": {
+      "red": 0.5, "white": 0.3, "black": 0.4, "pale": 1.0,
+      "wrath": 1.0, "lust": 1.0, "sloth": 1.0, "gluttony": 1.0, "gloom": 1.0, "envy": 1.0, "pride": 1.0
+    },
+     "laetitia_suit": {
+  "name": "Laetitia",
+  "rank": "TETH",
+  "price": 3200,
+  "image": "laetitiasuit.png",
+  "resistances": {
+    "red": 0.8,
+    "white": 0.6,
+    "black": 0.7,
+    "pale": 1.0
+  },
+  "effect": "When hit, 20% chance to heal 5 HP and reduce incoming damage by 30% for 1 turn.",
+  "description": "A cute doll’s outfit. It feels strangely comforting, as if a friend is watching over you."
+     } 
+   }
+}

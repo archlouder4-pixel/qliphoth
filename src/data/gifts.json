@@ -1,0 +1,449 @@
+{
+  "gifts": [
+    {
+      "id": "solemn_lament_gift",
+      "name": "Solemn Lament",
+      "slot": "right_back",
+      "tier": "HE",
+      "image": "solemn_lament_gift.png",
+      "stats": {
+        "fortitude": 1,
+        "prudence": 1,
+        "temperance": 2,
+        "justice": 2
+      },
+      "special": "Increases work success rate and speed, and attack weight."
+    },
+    {
+      "id": "da_capo",
+      "name": "Da Capo",
+      "slot": "eye",
+      "tier": "ALEPH",
+      "image": "da_capo.png",
+      "stats": {
+        "temperance": 4
+      },
+      "special": "When the suit 'da_capo' is equipped, absorbs all white damage (converts to healing?)."
+    },
+    {
+      "id": "penitence_gift",
+      "name": "Penitence",
+      "slot": "hat",
+      "tier": "ZAYIN",
+      "image": "penitence_gift.png",
+      "stats": {
+        "prudence": 2
+      },
+      "special": "Success rate increases by 10% when working with the corresponding abnormality (Funeral of the Dead Butterflies?)."
+    },
+    {
+      "id": "smile_gift",
+      "name": "Smile",
+      "slot": "eye",
+      "tier": "ALEPH",
+      "image": "smile_gift.png",
+      "stats": {
+        "fortitude": 5,
+        "prudence": 5
+      },
+      "special": "HP +5, SP +5 (approximated as +1 Fortitude and +1 Prudence)."
+    },
+    {
+      "id": "mimicry_gift",
+      "name": "Mimicry",
+      "slot": "cheek",
+      "tier": "ALEPH",
+      "image": "mimicry_gift.png",
+      "stats": {
+        "fortitude": 1
+      },
+      "special": "HP +10 and increases all HP healing received by 5%."
+    },
+    {
+      "id": "twilight_gift",
+      "name": "Twilight",
+      "slot": "right_back",
+      "tier": "ALEPH",
+      "image": "twilight_gift.png",
+      "stats": {
+        "fortitude": 7,
+        "prudence": 7,
+        "temperance": 7,
+        "justice": 7
+      },
+      "special": "HP +7; SP +7; Success Rate +7; Work Speed +7; Attack Weight +7; Coin Power +7"
+    },
+    {
+      "id": "our_galaxy_gift",
+      "name": "Our Galaxy",
+      "slot": "neck",
+      "tier": "HE",
+      "image": "our_galaxy_gift.png",
+      "stats": {
+        "fortitude": 2,
+        "temperance": 2
+      },
+      "special": "Success Rate +3, Work Speed +3. Heals a small amount of HP at short intervals."
+    },
+    {
+      "id": "paradise_lost_gift",
+      "name": "Paradise Lost",
+      "slot": "left_back",
+      "tier": "ALEPH",
+      "image": "paradise_lost_gift.png",
+      "stats": {
+        "fortitude": 10,
+        "prudence": 10,
+        "temperance": 10,
+        "justice": 10
+      },
+      "special": "HP +10; SP +10; Coin Power +10; Attack Weight +10"
+    },
+    {
+      "id": "gold_rush_gift",
+      "name": "Gold Rush",
+      "slot": "hand1",
+      "tier": "WAW",
+      "image": "gold_rush_gift.png",
+      "stats": {
+        "fortitude": 6
+      },
+      "special": "HP +6. Instinct work success rate increased by 6%."
+    },
+    {
+      "id": "wrist_cutter_gift",
+      "name": "Wrist Cutter",
+      "slot": "hand2",
+      "tier": "TETH",
+      "image": "wrist_cutter_gift.png",
+      "stats": {
+        "temperance": 4
+      },
+      "special": "Success rate +2% (each temperance point gives 0.5% success)."
+    },
+    {
+      "id": "lamp_gift",
+      "name": "Lamp",
+      "slot": "helmet",
+      "tier": "WAW",
+      "image": "lamp_gift.png",
+      "stats": {
+        "fortitude": 3,
+        "temperance": 6
+      },
+      "special": "HP +3, Success Rate +3%."
+    },
+    {
+      "id": "magic_bullet_gift",
+      "name": "Magic Bullet",
+      "slot": "mouth2",
+      "tier": "HE",
+      "image": "magic_bullet_gift.png",
+      "stats": {
+        "justice": 10
+      },
+      "special": "Justice +10."
+    },
+    {
+      "id": "kod_gift",
+      "name": "The Sword Sharpened with Tears",
+      "slot": "cheek",
+      "tier": "WAW",
+      "image": "kod_gift.png",
+      "stats": {
+        "justice": 4
+      },
+      "special": "SP +2, Justice +4 (SP bonus not reflected in stats)."
+    },
+    {
+      "id": "midsummer_gift",
+      "name": "Midsummer",
+      "slot": "waist",
+      "tier": "ALEPH",
+      "image": "midsummer_gift.png",
+      "stats": {
+        "justice": 16
+      },
+      "special": "Justice +16 (increases attack weight and coin power)."
+    },
+    {
+      "id": "hatred_gift",
+      "name": "In the name of love and hate",
+      "slot": "hat",
+      "tier": "WAW",
+      "image": "hatred_gift.png",
+      "stats": {
+        "temperance": 2,
+        "justice": 4
+      },
+      "special": "Increases Temperance and Justice, boosting work success and damage."
+    },
+    {
+      "id": "justitia_gift",
+      "name": "Justitia",
+      "slot": "eye",
+      "tier": "WAW",
+      "image": "justitia_gift.png",
+      "stats": {
+        "justice": 6
+      },
+      "special": "Justice +6 – improves coin power and attack weight."
+    },
+    {
+      "id": "regret_gift",
+      "name": "Regret",
+      "slot": "mouth",
+      "tier": "TETH",
+      "image": "forsaken_gift.png",
+      "stats": {
+        "fortitude": 2,
+        "prudence": 2
+      },
+      "special": "Fortitude +2, Prudence +2 – boosts HP and SP."
+    },
+    {
+      "id": "beak_gift",
+      "name": "Beak",
+      "slot": "neck",
+      "tier": "TETH",
+      "image": "beak.png",
+      "stats": {
+        "justice": 2
+      },
+      "special": "Justice +2 – improves coin power."
+    },
+    {
+      "id": "adoration_gift",
+      "name": "Adoration",
+      "slot": "helmet",
+      "tier": "ALEPH",
+      "image": "adoration.png",
+      "stats": {
+        "fortitude": 5,
+        "prudence": 10
+      },
+      "special": "Fortitude +5, Prudence +10 – significantly boosts HP and SP."
+    },
+    {
+      "id": "sound_of_a_star_gift",
+      "name": "Sound of a Star",
+      "slot": "eye",
+      "tier": "ALEPH",
+      "image": "soundofastar.png",
+      "stats": {
+        "justice": 11
+      },
+      "special": "Justice +11 – dramatically increases coin power and attack weight."
+    },
+    {
+      "id": "dead_silence",
+      "name": "Dead Silence",
+      "slot": "neck",
+      "tier": "WAW",
+      "image": "time.png",
+      "stats": {
+        "prudence": 3
+      },
+      "special": "Increases SP by 3. When dealing damage, has a 10% chance to reduce the target's SP by 5."
+    },
+    {
+      "id": "faint_aroma_gift",
+      "name": "Faint Aroma",
+      "slot": "face",
+      "tier": "WAW",
+      "image": "faintaroma.png",
+      "stats": {
+        "temperance": 2,
+        "prudence": 4
+      },
+      "special": "Increases Temperance (attachment work success) by 2 and Prudence (SP) by 4."
+    },
+    {
+      "id": "hornet_gift",
+      "name": "Hornet",
+      "slot": "helmet",
+      "tier": "WAW",
+      "image": "hornetgift.png",
+      "stats": {
+        "fortitude": 2,
+        "prudence": 4
+      },
+      "special": "HP +2, SP +4. Increases work success slightly."
+    },
+    {
+      "id": "red_eyes_gift",
+      "name": "Red Eyes",
+      "slot": "eye",
+      "tier": "TETH",
+      "image": "redeyes.png",
+      "stats": {
+        "temperance": 3
+      },
+      "special": "Increases Temperance (attachment work success) by 3."
+    },
+    {
+      "id": "harmony_gift",
+      "name": "Harmony",
+      "slot": "cheek",
+      "tier": "HE",
+      "image": "harmony.png",
+      "stats": {
+        "fortitude": 8
+      },
+      "special": "Increases HP by 8."
+    },
+    {
+      "id": "false_throne_gift",
+      "name": "False Throne",
+      "slot": "torso",
+      "tier": "ALEPH",
+      "image": "thronetorso.png",
+      "stats": {
+        "fortitude": 9,
+        "prudence": 9,
+        "temperance": 9,
+        "justice": 9
+      },
+      "special": "Increases all base stats by 9, greatly enhancing HP, SP, work success, and damage output."
+    },
+    {
+      "id": "dipsia_gift",
+      "name": "Dipsia",
+      "slot": "hat",
+      "tier": "WAW",
+      "image": "dipsiagift.png",
+      "stats": {
+        "justice": 8
+      },
+      "special": "Increases Justice by 8, improving attack weight and coin power."
+    },
+    {
+      "id": "censored_gift",
+      "name": "[CENSORED]",
+      "slot": "eye",
+      "tier": "ALEPH",
+      "image": "censored.png",
+      "stats": {
+        "prudence": 15
+      },
+      "special": "Increases SP by 15. Grants resistance to mental attacks."
+    },
+    {
+      "id": "cobalt_scar_gift",
+      "name": "Cobalt Scar",
+      "slot": "face",
+      "tier": "WAW",
+      "image": "cobaltscar.png",
+      "stats": {
+        "fortitude": 4,
+        "justice": 2
+      },
+      "special": "Fortitude +4, Justice +2 – boosts HP and attack power."
+    },
+    {
+      "id": "crimson_scar_gift",
+      "name": "Crimson Scar",
+      "slot": "mouth",
+      "tier": "WAW",
+      "image": "crimson_scar_gift.png",
+      "stats": {
+        "fortitude": 3,
+        "justice": 3
+      },
+      "special": "Fortitude +3, Justice +3 – increases HP and attack power."
+    },
+    {
+      "id": "contempt_awe_gift",
+      "name": "Awe",
+      "slot": "hat",
+      "tier": "ALEPH",
+      "image": "spiralingcontempt.png",
+      "stats": {
+        "fortitude": 8,
+        "temperance": 7,
+        "justice": 4,
+        "prudence": 5
+      },
+      "special": "Fortitude +3, Justice +4, Temperance + 7, Prudence +5"
+    },
+      {
+      "id": "laetitia_gift",
+      "name": "Laetitia",
+      "slot": "helmet",
+      "tier": "HE",
+      "image": "laetitia_gift.png",
+      "stats": {
+        "prudence": 4
+      },
+      "special": "Increases SP by 4 – boosts SP."
+    },
+      {
+      "id": "pink_gift",
+      "name": "Pink",
+      "slot": "helmet",
+      "tier": "ALEPH",
+      "image": "pink_gift.png",
+      "stats": {
+        "justice": 10
+      },
+      "special": "Justice +10 – Increases the damage of this Abnormality's weapon by 15% when the corresponding Abnormality’s armor is equipped."
+    },
+      {
+      "id": "logging_gift",
+      "name": "Logging",
+      "slot": "torso",
+      "tier": "HE",
+      "image": "logging_gift.png",
+      "stats": {
+        "fortitude": 2,  
+        "temperance": 4
+      },
+      "special": "HP +2, Success Rate +2, Work Speed +2 – Increases HP, Work Success Rate and Work Speed by 2."
+    },
+      {
+       "id": "harvest_gift",
+       "name": "Harvest",
+       "slot": "neck",
+       "tier": "HE",
+       "image": "harvest_gift.png",
+       "stats": {
+        "prudence": 4  
+      },
+      "special": "SP +4 – Increases SP by 4."
+    },
+      {
+       "id": "soda_gift",
+       "name": "Soda",
+       "slot": "mouth2",
+       "tier": "ZAYIN",
+       "image": "soda_gift.png",
+       "stats": {
+        "fortitude": 2  
+      },
+      "special": "HP +4 – Increases HP by 2."
+      },
+      {
+       "id": "hypocrisy_gift",
+       "name": "Hypocrisy",
+       "slot": "helmet",
+       "tier": "WAW",
+       "image": "hypocrisy_gift.png",
+       "stats": {
+        "fortitude": 3,
+        "prudence": 3   
+      },
+      "special": "HP +3, SP +3 – Increases HP and SP by 3."
+      },
+      {
+       "id": "frag_from_somewhere_gift",
+       "name": "Fragments from Somewhere",
+       "slot": "torso",
+       "tier": "TETH",
+       "image": "fragfromsomewhere_gift.png",
+       "stats": {
+        "temperance": 4 
+      },
+      "special": "Work Success Rate +2, Work Speed +2 – Increases Work Success Rate and Work Speed by 2."
+      }    
+  ]
+}
