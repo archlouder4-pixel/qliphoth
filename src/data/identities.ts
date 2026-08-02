@@ -435,7 +435,7 @@ export const identities: Identity[] = [
       rankRequired: 0,
       mechanics: { damagePerResolve: 1.2, spHealOnHit: true, trueExecutionThreshold: 25 },
     },
-    signatureWeaponId: 'eclipse_blade',
+    signatureWeaponId: 'excalibur_greatsword',
     autoSelectPassive: { probability: 0.25 },
   },
 
