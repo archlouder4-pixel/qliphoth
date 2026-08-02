@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { DepartmentRoom } from './durableObjects/DepartmentRoom';
 import { ReceptionRoom } from './durableObjects/ReceptionRoom';
 import { CompetitiveRoom } from './durableObjects/CompetitiveRoom';
@@ -14,9 +15,27 @@ type Env = {
   EXPLORATION_ROOM: DurableObjectNamespace;
   GLOBAL_CHAT: DurableObjectNamespace;
   DB: D1Database;
+  ALLOWED_ORIGIN?: string;
 };
 
 const app = new Hono<{ Bindings: Env }>();
+
+// ─── CORS Middleware ──────────────────────────────────────────────
+app.use('*', async (c, next) => {
+  // Handle preflight OPTIONS requests
+  if (c.req.method === 'OPTIONS') {
+    c.header('Access-Control-Allow-Origin', c.env.ALLOWED_ORIGIN || '*');
+    c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    c.header('Access-Control-Max-Age', '86400');
+    return c.body(null, 204);
+  }
+  await next();
+  // Add CORS headers to all responses
+  c.header('Access-Control-Allow-Origin', c.env.ALLOWED_ORIGIN || '*');
+  c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+});
 
 // ─── Room endpoints ────────────────────────────────────────────
 app.get('/room/:type/:roomId', async (c) => {
@@ -28,7 +47,7 @@ app.get('/room/:type/:roomId', async (c) => {
     case 'reception': namespace = c.env.RECEPTION_ROOM; break;
     case 'competitive': namespace = c.env.COMPETITIVE_ROOM; break;
     case 'exploration': namespace = c.env.EXPLORATION_ROOM; break;
-    default: return new Response('Invalid room type', { status: 400 });
+    default: return c.json({ error: 'Invalid room type' }, 400);
   }
   const id = namespace.idFromName(roomId);
   const stub = namespace.get(id);
@@ -71,7 +90,9 @@ app.post('/api/bracket', async (c) => {
     entries: [
       { rank: 1, userId: 'user_1', name: 'PlayerOne', score: 12500, isGuest: false },
       { rank: 2, userId: 'user_2', name: 'ShadowStrike', score: 11200, isGuest: false },
-      // ... more mock entries
+      { rank: 3, userId: 'user_3', name: 'LunarBlade', score: 9800, isGuest: false },
+      { rank: 4, userId: 'user_4', name: 'CrimsonReaper', score: 8700, isGuest: false },
+      { rank: 5, userId: 'user_5', name: 'EclipseSage', score: 7600, isGuest: false },
     ]
   });
 });
@@ -81,6 +102,7 @@ app.post('/api/ranking', async (c) => {
     top: [
       { rank: 1, userId: 'user_1', name: 'PlayerOne', score: 12500, percentile: 'Top 1%' },
       { rank: 2, userId: 'user_2', name: 'ShadowStrike', score: 11200, percentile: 'Top 2%' },
+      { rank: 3, userId: 'user_3', name: 'LunarBlade', score: 9800, percentile: 'Top 3%' },
     ],
     playerEntry: { rank: 3, userId: 'current_user', name: 'You', score: 9800, isGuest: false, percentile: 'Top 3%' }
   });
