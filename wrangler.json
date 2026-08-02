@@ -14,5 +14,26 @@
 
   "vars": {
     "ALLOWED_ORIGIN": "https://qliphoth.pages.dev"
-  }
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "DEPARTMENT_ROOM", "class_name": "DepartmentRoom" },
+      { "name": "RECEPTION_ROOM", "class_name": "ReceptionRoom" },
+      { "name": "COMPETITIVE_ROOM", "class_name": "CompetitiveRoom" },
+      { "name": "EXPLORATION_ROOM", "class_name": "ExplorationRoom" }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "DepartmentRoom",
+        "ReceptionRoom",
+        "CompetitiveRoom",
+        "ExplorationRoom"
+      ]
+    }
+  ]
 }
