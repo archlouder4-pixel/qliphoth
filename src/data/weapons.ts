@@ -24,7 +24,7 @@ export interface Weapon {
 export const weapons: Weapon[] = [
   // ─── ARTHUR ─────────────────────────────────────────────────────
   {
-    id: 'eclipse_blade',
+    id: 'excalibur_greatsword',
     name: 'Excalibur Greatsword',
     type: 'Greatsword',
     rarity: 'SSR',
