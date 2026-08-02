@@ -870,7 +870,7 @@ export default function CompetitiveReception() {
     let weaponId = owned.equippedWeaponId || null;
     // Force equip Arthur (starter unit)
     if (identityData.id === 'arthur_excalibur') {
-      const targetWeaponId = identityData.signatureWeaponId || 'eclipse_blade';
+      const targetWeaponId = identityData.signatureWeaponId || 'excalibur_greatsword';
       if (canEquipWeapon(identityData.id, targetWeaponId)) {
         const ownedWeapon = ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
         if (ownedWeapon) {
@@ -903,7 +903,7 @@ export default function CompetitiveReception() {
     let weaponId = activeIdentity.equippedWeaponId || null;
     // Force equip Arthur if needed
     if (identityData?.id === 'arthur_excalibur') {
-      const targetWeaponId = identityData.signatureWeaponId || 'eclipse_blade';
+      const targetWeaponId = identityData.signatureWeaponId || 'excalibur_greatsword';
       if (canEquipWeapon(identityData.id, targetWeaponId)) {
         const ownedWeapon = ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
         if (ownedWeapon) {
