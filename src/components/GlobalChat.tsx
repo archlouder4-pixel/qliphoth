@@ -1,12 +1,9 @@
 // src/components/GlobalChat.tsx
 import React, { useState, useEffect, useRef } from 'react';
-import useGameStore from '../store/gameStore';
-import { getDisplayName } from '../auth/discord';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
 export default function GlobalChat() {
-  const { user } = useGameStore(); // ✅ no AuthContext
   const [messages, setMessages] = useState<{ user: string; text: string; timestamp: number }[]>([]);
   const [input, setInput] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -46,8 +43,9 @@ export default function GlobalChat() {
       alert('Chat not connected.');
       return;
     }
-    const displayName = user ? getDisplayName(user) : 'Guest';
-    wsRef.current.send(JSON.stringify({ type: 'chat', user: displayName, text: input.trim() }));
+    // Get user name from localStorage (set by your auth system)
+    const user = localStorage.getItem('user') || 'Guest';
+    wsRef.current.send(JSON.stringify({ type: 'chat', user, text: input.trim() }));
     setInput('');
   };
 
@@ -57,7 +55,7 @@ export default function GlobalChat() {
     if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const displayName = user ? getDisplayName(user) : 'Guest';
+  const displayName = localStorage.getItem('user') || 'Guest';
 
   return (
     <div className="fixed bottom-4 right-4 z-50">
