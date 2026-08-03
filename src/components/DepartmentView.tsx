@@ -1,5 +1,5 @@
 // DepartmentView.tsx – Co‑op facility management with native WebSocket
-// Now with Global Chat (visible only in co‑op)
+// Added: Global Chat with React.lazy to avoid circular dependency.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -25,7 +25,9 @@ import { egoGifts } from '../data/egoGifts';
 import { DEPARTMENTS, DepartmentId } from '../data/departments';
 import { abnormalities, getAbnormalityById, type WorkType } from '../data/abnormalities';
 import { getDisplayName } from '../auth/discord';
-import GlobalChat from '../components/GlobalChat';
+
+// ─── Lazy import GlobalChat ──────────────────────────────────────────
+const GlobalChat = React.lazy(() => import('../components/GlobalChat'));
 
 // ─── Constants ──────────────────────────────────────────────────────────
 const MAX_CLASH_POWER = 50;
@@ -1911,7 +1913,13 @@ export default function DepartmentView() {
           {view === 'memory' && renderMemory()}
         </>
       )}
-      {isCoop && <GlobalChat />}
+
+      {/* ─── Global Chat ─── */}
+      {isCoop && (
+        <React.Suspense fallback={<div className="h-12 w-12" />}>
+          <GlobalChat />
+        </React.Suspense>
+      )}
     </div>
   );
 }
