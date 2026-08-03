@@ -43,7 +43,6 @@ export default function GlobalChat() {
       alert('Chat not connected.');
       return;
     }
-    // Get user name from localStorage (set by your auth system)
     const user = localStorage.getItem('user') || 'Guest';
     wsRef.current.send(JSON.stringify({ type: 'chat', user, text: input.trim() }));
     setInput('');
