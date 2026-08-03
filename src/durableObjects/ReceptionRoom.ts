@@ -182,7 +182,10 @@ export class ReceptionRoom extends DurableObject {
       if (idx === undefined) return;
       const key = idx === 0 ? 'p1' : 'p2';
       if (this.state[`${key}SkillIdx`] !== null) return;
-      this.state[`${key}SkillIdx`] = data.skillIdx;
+      // ─── FIX: client sends `{ type, payload }` via sendAction(), not `{ type, skillIdx }` ──
+      const skillIdx = typeof data.skillIdx === 'number' ? data.skillIdx : data.payload;
+      if (typeof skillIdx !== 'number') return;
+      this.state[`${key}SkillIdx`] = skillIdx;
       await this.saveState();
       this.broadcastState();
 
