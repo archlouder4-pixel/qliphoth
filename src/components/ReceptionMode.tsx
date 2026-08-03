@@ -166,6 +166,7 @@ export default function ReceptionMode({
   const [ultBarValue, setUltBarValue] = useState(0);
   const [passiveActivating, setPassiveActivating] = useState(false);
   const [weaponError, setWeaponError] = useState<string | null>(null);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting');
 
   const myPlayerIndexRef = useRef<0 | 1>(0);
   const roomStateRef = useRef<any>(null);
@@ -180,30 +181,10 @@ export default function ReceptionMode({
 
   useEffect(() => {
     if (!identityId) return;
-    const owned = store.ownedIdentities.find(o => o.identityId === identityId);
-    if (!owned) return;
-
-    // Arthur is a free starter identity and is always supposed to own and
-    // wield his signature weapon. Grant + equip it here (once, on mount /
-    // identity switch) rather than in getWeaponName(), which ran this same
-    // check on every render and mutated state from inside a render-time
-    // function — a React anti-pattern, and also why the lobby display never
-    // updated even after the Find Match button's own copy of this fix.
-    if (identityId === 'arthur_excalibur') {
-      const targetWeaponId = 'excalibur_greatsword';
-      if (owned.equippedWeaponId !== targetWeaponId && canEquipWeapon(identityId, targetWeaponId)) {
-        if (!store.ownedWeapons.some(ow => ow.weaponId === targetWeaponId)) {
-          store.grantWeapon(targetWeaponId);
-          addLogRef.current('[SYSTEM] Granted starter weapon: Excalibur Greatsword.');
-        }
-        store.setEquippedWeapon(identityId, targetWeaponId);
-        addLogRef.current('[SYSTEM] Auto-equipped Excalibur Greatsword.');
-      }
-      return;
-    }
-
     const identity = identities.find(i => i.id === identityId);
     if (!identity?.signatureWeaponId) return;
+    const owned = store.ownedIdentities.find(o => o.identityId === identityId);
+    if (!owned) return;
     if (owned.equippedWeaponId) return;
     const sigWeaponId = identity.signatureWeaponId;
     if (!canEquipWeapon(identityId, sigWeaponId)) return;
@@ -275,9 +256,11 @@ export default function ReceptionMode({
     const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
     const ws = new WebSocket(`wss://${wsUrl}/room/reception/match`);
     wsRef.current = ws;
+    setWsStatus('connecting');
 
     ws.onopen = () => {
       console.log('WebSocket connected to Reception');
+      setWsStatus('open');
       sendAction('getLeaderboard');
     };
 
@@ -292,6 +275,7 @@ export default function ReceptionMode({
 
     ws.onclose = () => {
       console.log('WebSocket closed, reconnecting...');
+      setWsStatus('closed');
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = setTimeout(() => {
         connectWebSocket();
@@ -300,6 +284,7 @@ export default function ReceptionMode({
 
     ws.onerror = (err) => {
       console.error('WebSocket error:', err);
+      setWsStatus('closed');
     };
   };
 
@@ -450,12 +435,14 @@ export default function ReceptionMode({
   const buildPlayerData = () => {
     const identity = identities.find(i => i.id === identityId);
     if (!identity) {
+      setWeaponError('Identity not found.');
       addLog('[SYSTEM] Identity not found.');
       return null;
     }
 
     const owned = store.ownedIdentities.find(o => o.identityId === identityId);
     if (!owned) {
+      setWeaponError('Identity not owned.');
       addLog('[SYSTEM] Identity not owned.');
       return null;
     }
@@ -465,23 +452,17 @@ export default function ReceptionMode({
     if (identityId === 'arthur_excalibur') {
       const targetWeaponId = 'excalibur_greatsword';
       if (canEquipWeapon(identityId, targetWeaponId)) {
-        let ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
-        if (!ownedWeapon) {
-          // Arthur is a free starter identity and is always supposed to
-          // come with his signature weapon (see gameStore's INITIAL_STATE /
-          // onRehydrateStorage backfill). If it's still missing here — an
-          // older save, a persistence path that skipped that backfill,
-          // whatever — grant it now instead of hard-blocking matchmaking
-          // with "not owned" for a weapon the player was never meant to
-          // have to earn.
-          store.grantWeapon(targetWeaponId);
-          addLog('[SYSTEM] Granted starter weapon: Excalibur Greatsword.');
-          ownedWeapon = { weaponId: targetWeaponId, level: 1, exp: 0 };
+        const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
+        if (ownedWeapon) {
+          if (owned.equippedWeaponId !== targetWeaponId) {
+            store.setEquippedWeapon(identityId, targetWeaponId);
+          }
+          weaponId = targetWeaponId;
+        } else {
+          setWeaponError('Excalibur weapon not owned.');
+          addLog('[SYSTEM] Excalibur weapon not owned.');
+          return null;
         }
-        if (owned.equippedWeaponId !== targetWeaponId) {
-          store.setEquippedWeapon(identityId, targetWeaponId);
-        }
-        weaponId = targetWeaponId;
       } else {
         setWeaponError('Cannot equip Excalibur on this identity.');
         addLog('[SYSTEM] Cannot equip Excalibur on this identity.');
@@ -662,7 +643,14 @@ export default function ReceptionMode({
     const getWeaponName = () => {
       const owned = store.ownedIdentities.find(o => o.identityId === identityId);
       if (!owned) return 'None';
-      const weaponId = owned.equippedWeaponId;
+      let weaponId = owned.equippedWeaponId;
+      if (identityId === 'arthur_excalibur' && weaponId !== 'excalibur_greatsword') {
+        const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === 'excalibur_greatsword');
+        if (ownedWeapon && canEquipWeapon(identityId, 'excalibur_greatsword')) {
+          store.setEquippedWeapon(identityId, 'excalibur_greatsword');
+          weaponId = 'excalibur_greatsword';
+        }
+      }
       if (!weaponId) return 'None';
       const weapon = weapons.find(w => w.id === weaponId);
       return weapon ? weapon.name : 'None';
@@ -675,7 +663,21 @@ export default function ReceptionMode({
     return (
       <div className="min-h-screen bg-[#070a14] text-white font-sans p-4">
         <div className="max-w-4xl mx-auto space-y-4">
-          <TacticalPanel variant="accent" glow header="⚔️ THE RECEPTION" headerRight={<span className="text-[10px] text-[#4a5568]">DUEL MODE</span>}>
+          <TacticalPanel
+            variant="accent"
+            glow
+            header="⚔️ THE RECEPTION"
+            headerRight={
+              <span className={`text-[10px] flex items-center gap-1 ${
+                wsStatus === 'open' ? 'text-[#05ffa1]' : wsStatus === 'connecting' ? 'text-[#ff9e00]' : 'text-[#ff2a6d]'
+              }`}>
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                  wsStatus === 'open' ? 'bg-[#05ffa1]' : wsStatus === 'connecting' ? 'bg-[#ff9e00] animate-pulse' : 'bg-[#ff2a6d]'
+                }`} />
+                {wsStatus === 'open' ? 'CONNECTED' : wsStatus === 'connecting' ? 'CONNECTING...' : 'DISCONNECTED'}
+              </span>
+            }
+          >
             <p className="text-sm text-[#8b9bb4]">Find a match and climb the ranks.</p>
           </TacticalPanel>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -740,11 +742,35 @@ export default function ReceptionMode({
                   <TacticalButton onClick={cancelMatch} variant="danger" size="md" className="mt-3 w-full">CANCEL</TacticalButton>
                 </TacticalPanel>
               ) : (
-                <TacticalButton onClick={findMatch} variant="primary" size="lg" className="w-full">⚔️ FIND MATCH</TacticalButton>
+                <>
+                  <TacticalButton
+                    onClick={findMatch}
+                    variant="primary"
+                    size="lg"
+                    className="w-full"
+                    disabled={wsStatus !== 'open'}
+                  >
+                    ⚔️ FIND MATCH
+                  </TacticalButton>
+                  {wsStatus !== 'open' && (
+                    <p className="text-xs text-[#ff9e00] text-center">
+                      {wsStatus === 'connecting' ? 'Connecting to server…' : 'Not connected to server. Retrying…'}
+                    </p>
+                  )}
+                </>
               )}
               <TacticalButton onClick={onExit} variant="neutral" size="md" className="w-full">← Exit</TacticalButton>
             </div>
           </div>
+          {log.length > 0 && (
+            <TacticalPanel header="STATUS">
+              <div className="max-h-24 overflow-y-auto bg-[#0a0e14] p-3 font-mono text-xs space-y-0.5">
+                {log.slice(-5).map((l, i) => (
+                  <p key={i} className="text-[#4a5568] break-words">{l}</p>
+                ))}
+              </div>
+            </TacticalPanel>
+          )}
           <TacticalPanel header="🏆 LEADERBOARD">
             <div className="space-y-1 max-h-64 overflow-y-auto">
               {leaderboard.length === 0 ? (
