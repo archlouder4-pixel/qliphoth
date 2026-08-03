@@ -180,10 +180,30 @@ export default function ReceptionMode({
 
   useEffect(() => {
     if (!identityId) return;
-    const identity = identities.find(i => i.id === identityId);
-    if (!identity?.signatureWeaponId) return;
     const owned = store.ownedIdentities.find(o => o.identityId === identityId);
     if (!owned) return;
+
+    // Arthur is a free starter identity and is always supposed to own and
+    // wield his signature weapon. Grant + equip it here (once, on mount /
+    // identity switch) rather than in getWeaponName(), which ran this same
+    // check on every render and mutated state from inside a render-time
+    // function — a React anti-pattern, and also why the lobby display never
+    // updated even after the Find Match button's own copy of this fix.
+    if (identityId === 'arthur_excalibur') {
+      const targetWeaponId = 'excalibur_greatsword';
+      if (owned.equippedWeaponId !== targetWeaponId && canEquipWeapon(identityId, targetWeaponId)) {
+        if (!store.ownedWeapons.some(ow => ow.weaponId === targetWeaponId)) {
+          store.grantWeapon(targetWeaponId);
+          addLogRef.current('[SYSTEM] Granted starter weapon: Excalibur Greatsword.');
+        }
+        store.setEquippedWeapon(identityId, targetWeaponId);
+        addLogRef.current('[SYSTEM] Auto-equipped Excalibur Greatsword.');
+      }
+      return;
+    }
+
+    const identity = identities.find(i => i.id === identityId);
+    if (!identity?.signatureWeaponId) return;
     if (owned.equippedWeaponId) return;
     const sigWeaponId = identity.signatureWeaponId;
     if (!canEquipWeapon(identityId, sigWeaponId)) return;
@@ -642,14 +662,7 @@ export default function ReceptionMode({
     const getWeaponName = () => {
       const owned = store.ownedIdentities.find(o => o.identityId === identityId);
       if (!owned) return 'None';
-      let weaponId = owned.equippedWeaponId;
-      if (identityId === 'arthur_excalibur' && weaponId !== 'excalibur_greatsword') {
-        const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === 'excalibur_greatsword');
-        if (ownedWeapon && canEquipWeapon(identityId, 'excalibur_greatsword')) {
-          store.setEquippedWeapon(identityId, 'excalibur_greatsword');
-          weaponId = 'excalibur_greatsword';
-        }
-      }
+      const weaponId = owned.equippedWeaponId;
       if (!weaponId) return 'None';
       const weapon = weapons.find(w => w.id === weaponId);
       return weapon ? weapon.name : 'None';
