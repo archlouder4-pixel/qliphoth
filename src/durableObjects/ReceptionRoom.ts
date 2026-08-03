@@ -42,6 +42,12 @@ export class ReceptionRoom extends DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // ─── DEBUG: force-clear stuck/stale room state (e.g. leftover from earlier bugs) ──
+    if (url.searchParams.get('reset') === 'true') {
+      this.state = this.createDefaultState();
+      await this.saveState();
+      return Response.json({ reset: true, state: this.state });
+    }
     if (request.headers.get('Upgrade') === 'websocket') {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
@@ -60,7 +66,7 @@ export class ReceptionRoom extends DurableObject {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
-    const session = this.ctx.getWebSocketData(ws) as { playerIndex?: 0 | 1 };
+    const session = (ws.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
 
     // ─── FIX: matchmaking entry point — this is what the client actually sends ──────
     if (data.type === 'findMatch') {
@@ -78,7 +84,7 @@ export class ReceptionRoom extends DurableObject {
       const idx: 0 | 1 = p1Taken ? 1 : 0;
       const playerKey = idx === 0 ? 'p1' : 'p2';
       this.state[playerKey] = { ...(data.payload || {}), userId: data.userId };
-      this.ctx.setWebSocketData(ws, { playerIndex: idx });
+      ws.serializeAttachment({ playerIndex: idx });
       await this.saveState();
 
       const bothFilled = this.slotTaken('p1') && this.slotTaken('p2');
@@ -92,8 +98,8 @@ export class ReceptionRoom extends DurableObject {
         await this.saveState();
 
         // Tell every connected socket its own seat, then send the fresh state.
-        for (const [sock] of this.ctx.getWebSockets()) {
-          const sess = this.ctx.getWebSocketData(sock) as { playerIndex?: 0 | 1 };
+        for (const sock of this.ctx.getWebSockets()) {
+          const sess = (sock.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
           if (sess?.playerIndex !== undefined) {
             sock.send(JSON.stringify({ type: 'roomJoined', playerIndex: sess.playerIndex }));
           }
@@ -121,7 +127,7 @@ export class ReceptionRoom extends DurableObject {
       }
 
       this.state[key] = {} as any;
-      this.ctx.setWebSocketData(ws, {});
+      ws.serializeAttachment({});
       await this.saveState();
       ws.send(JSON.stringify({ type: 'matchCancelled' }));
       return;
@@ -138,7 +144,7 @@ export class ReceptionRoom extends DurableObject {
       const playerKey = idx === 0 ? 'p1' : 'p2';
       this.state[playerKey] = { ...data.playerData, userId: data.userId };
       this.state.phase = 'p1Select';
-      this.ctx.setWebSocketData(ws, { playerIndex: idx });
+      ws.serializeAttachment({ playerIndex: idx });
       await this.saveState();
       this.broadcastState();
       ws.send(JSON.stringify({ type: 'roomJoined', playerIndex: idx }));
@@ -282,7 +288,7 @@ export class ReceptionRoom extends DurableObject {
 
   private broadcastState() {
     const message = JSON.stringify({ type: 'gameState', state: this.state });
-    for (const [ws, _] of this.ctx.getWebSockets()) {
+    for (const ws of this.ctx.getWebSockets()) {
       ws.send(message);
     }
   }
@@ -294,13 +300,13 @@ export class ReceptionRoom extends DurableObject {
       lifeChanges: this.state.lifeChanges,
       newRanks: this.state.newRanks,
     };
-    for (const [ws, _] of this.ctx.getWebSockets()) {
+    for (const ws of this.ctx.getWebSockets()) {
       ws.send(JSON.stringify({ type: 'matchResult', ...result }));
     }
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    const session = this.ctx.getWebSocketData(ws) as { playerIndex?: 0 | 1 };
+    const session = (ws.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
     if (session?.playerIndex !== undefined) {
       const idx = session.playerIndex;
       const loserKey = idx === 0 ? 'p1' : 'p2';
