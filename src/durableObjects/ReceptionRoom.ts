@@ -184,7 +184,22 @@ export class ReceptionRoom extends DurableObject {
       if (this.state[`${key}SkillIdx`] !== null) return;
       // ─── FIX: client sends `{ type, payload }` via sendAction(), not `{ type, skillIdx }` ──
       const skillIdx = typeof data.skillIdx === 'number' ? data.skillIdx : data.payload;
-      if (typeof skillIdx !== 'number') return;
+
+      // ─── FIX: validate the index against the player's actual skill list before
+      // accepting it. Previously any number (including -1, which the client could
+      // send when Array.indexOf() failed to find a skill reference) was accepted
+      // here. Once both players had "selected", resolveClash() would look up
+      // this.state[key].skills[-1], get `undefined`, and bail out WITHOUT
+      // resetting p1SkillIdx/p2SkillIdx — leaving both players permanently stuck
+      // on "Skill submitted – waiting for opponent" / "Waiting for opponent"
+      // with no way to act again. Rejecting bad indices here stops that state
+      // from ever being written. ─────────────────────────────────────────────
+      const skillsArr = this.state[key]?.skills || [];
+      if (typeof skillIdx !== 'number' || skillIdx < 0 || skillIdx >= skillsArr.length) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid skill selection.' }));
+        return;
+      }
+
       this.state[`${key}SkillIdx`] = skillIdx;
       await this.saveState();
       this.broadcastState();
@@ -200,7 +215,26 @@ export class ReceptionRoom extends DurableObject {
   private async resolveClash() {
     const p1Skill = this.state.p1.skills[this.state.p1SkillIdx!];
     const p2Skill = this.state.p2.skills[this.state.p2SkillIdx!];
-    if (!p1Skill || !p2Skill) return;
+
+    // ─── FIX: this used to `return` here with no cleanup whenever either
+    // skill lookup came back undefined (e.g. a stale/invalid index slipped
+    // through). Both p1SkillIdx/p2SkillIdx stayed non-null forever, so the
+    // room was permanently stuck: every client saw "submitted" state with
+    // no further messages ever arriving, i.e. the exact soft lock reported
+    // ("Waiting for opponent" forever, on both sides, whether or not the
+    // Excalibur auto-select passive fired). Now we reset the turn's
+    // selection state and re-broadcast so play can continue instead of
+    // hanging silently. The selectSkill validation above should prevent
+    // this from triggering at all going forward, but this is kept as a
+    // safety net. ──────────────────────────────────────────────────────
+    if (!p1Skill || !p2Skill) {
+      this.state.p1SkillIdx = null;
+      this.state.p2SkillIdx = null;
+      this.state.clashResult = null;
+      await this.saveState();
+      this.broadcastState();
+      return;
+    }
 
     const p1IsUlt = p1Skill.isUltimate && this.state.p1.ultimateBar >= 100;
     const p2IsUlt = p2Skill.isUltimate && this.state.p2.ultimateBar >= 100;
