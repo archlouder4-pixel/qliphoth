@@ -88,7 +88,12 @@ export async function processOAuthCallback(): Promise<DiscordUser | null> {
       username: data.username,
       global_name: data.global_name,
       avatar: data.avatar,
-      isAdmin: data.id === ADMIN_DISCORD_ID,
+      // ADMIN_DISCORD_ID is an array of admin IDs — was being compared
+      // directly against a single string (`data.id === ADMIN_DISCORD_ID`),
+      // which is a string-vs-array comparison and is always false. No real
+      // Discord login could ever be flagged as admin. Use .includes() so
+      // BOTH configured admin IDs actually work.
+      isAdmin: ADMIN_DISCORD_ID.includes(data.id),
       isGuest: false,
     };
     storeUser(user);
@@ -104,7 +109,10 @@ export async function processOAuthCallback(): Promise<DiscordUser | null> {
 // Mock login — for testing without Discord OAuth (admin)
 export function mockLoginAdmin(): DiscordUser {
   const user: DiscordUser = {
-    id: ADMIN_DISCORD_ID,
+    // Was `id: ADMIN_DISCORD_ID` — assigning the whole admin-ID *array* as
+    // a single user's `id` (which is typed as `string`). Use the first
+    // admin ID instead.
+    id: ADMIN_DISCORD_ID[0],
     username: 'Admin',
     global_name: 'Admin Tester',
     isAdmin: true,
