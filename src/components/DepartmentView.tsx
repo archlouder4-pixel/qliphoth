@@ -1,5 +1,5 @@
 // DepartmentView.tsx – Co‑op facility management with native WebSocket
-// Added: Global Chat with dynamic import (no static import, no React.lazy)
+// Added: custom room codes, global chat (visible only in co‑op)
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -25,6 +25,7 @@ import { egoGifts } from '../data/egoGifts';
 import { DEPARTMENTS, DepartmentId } from '../data/departments';
 import { abnormalities, getAbnormalityById, type WorkType } from '../data/abnormalities';
 import { getDisplayName } from '../auth/discord';
+import GlobalChat from '../components/GlobalChat';
 
 // ─── Constants ──────────────────────────────────────────────────────────
 const MAX_CLASH_POWER = 50;
@@ -223,9 +224,6 @@ export default function DepartmentView() {
   const [enemyHp, setEnemyHp] = useState(0);
   const [enemyMaxHp, setEnemyMaxHp] = useState(0);
   const [combatInitiator, setCombatInitiator] = useState<string | null>(null);
-
-  // ─── Chat component state (dynamic import) ──────────────────────
-  const [ChatComponent, setChatComponent] = useState<React.ComponentType | null>(null);
 
   // ─── Hydration ────────────────────────────────────────────────────
   const [isHydrated, setIsHydrated] = useState(false);
@@ -621,17 +619,6 @@ export default function DepartmentView() {
       setWorkResult(null);
     }, 3000);
   };
-
-  // ─── Dynamic import for chat ────────────────────────────────────
-  useEffect(() => {
-    if (isCoop) {
-      import('../components/GlobalChat')
-        .then(module => setChatComponent(() => module.default))
-        .catch(err => console.error('Failed to load chat:', err));
-    } else {
-      setChatComponent(null);
-    }
-  }, [isCoop]);
 
   // ─── Combat action ──────────────────────────────────────────────────
   const handleCombatAction = () => {
@@ -1924,9 +1911,7 @@ export default function DepartmentView() {
           {view === 'memory' && renderMemory()}
         </>
       )}
-
-      {/* ─── Global Chat ─── */}
-      {isCoop && ChatComponent && <ChatComponent />}
+      {isCoop && <GlobalChat />}
     </div>
   );
 }
