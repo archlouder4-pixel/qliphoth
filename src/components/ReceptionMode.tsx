@@ -388,6 +388,7 @@ export default function ReceptionMode({
       }
 
       case 'error': {
+        setQueued(false);
         alert(`❌ ${data.message}`);
         break;
       }
@@ -603,6 +604,8 @@ export default function ReceptionMode({
 
   // ─── FIXED "Find Match" ──────────────────────────────────────────
   const findMatch = () => {
+    if (queued) return; // already searching — don't spam the server
+
     // Ensure WebSocket is connected
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       addLog('[SYSTEM] Connecting to server...');
@@ -614,6 +617,7 @@ export default function ReceptionMode({
           if (playerData) {
             sendAction('findMatch', playerData);
             addLog('[SYSTEM] Finding match...');
+            setQueued(true); // optimistic — server 'queued'/'matchCancelled' will correct this if needed
           }
         } else {
           addLog('[SYSTEM] Failed to connect to server.');
@@ -625,6 +629,7 @@ export default function ReceptionMode({
     if (!playerData) return;
     sendAction('findMatch', playerData);
     addLog('[SYSTEM] Finding match...');
+    setQueued(true); // optimistic — server 'queued'/'matchCancelled' will correct this if needed
   };
 
   const cancelMatch = () => {
