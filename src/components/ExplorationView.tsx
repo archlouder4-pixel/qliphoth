@@ -1,5 +1,5 @@
 // ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op)
-// Now with Global Chat (visible only in co‑op mode) – dynamically loaded
+// Added: custom room codes, global chat (visible only in co‑op), solo difficulty UI overlay.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import {
@@ -30,6 +30,7 @@ import { explorationEnemies, type ExplorationEnemy as RawExplorationEnemy } from
 import { DEPARTMENTS } from '../data/departments';
 import { getDisplayName } from '../auth/discord';
 import { useAuth } from '../auth/AuthContext';
+import GlobalChat from '../components/GlobalChat';
 
 const MAX_CLASH_POWER = 50;
 const ULTIMATE_GAIN_MIN = 0.003;
@@ -340,18 +341,6 @@ export default function ExplorationView() {
   const [isCombatFinished, setIsCombatFinished] = useState(false);
   const [rewardsClaimed, setRewardsClaimed] = useState(false);
   const [finalScore, setFinalScore] = useState<number | null>(null);
-
-  // --- Dynamic import for GlobalChat ---
-  const [ChatComponent, setChatComponent] = useState<React.ComponentType | null>(null);
-  useEffect(() => {
-    if (gameMode === 'coop') {
-      import('../components/GlobalChat')
-        .then(module => setChatComponent(() => module.default))
-        .catch(err => console.error('Failed to load GlobalChat:', err));
-    } else {
-      setChatComponent(null);
-    }
-  }, [gameMode]);
 
   const activeIdentity = identityStates[activeIdentityIndex] || null;
   const activeSkills = activeIdentity
@@ -1619,9 +1608,6 @@ export default function ExplorationView() {
             {log.map((l, i) => <p key={i} className="text-gray-400">{l}</p>)}
           </div>
         </div>
-
-        {/* ─── GLOBAL CHAT (co-op only) ─── */}
-        {ChatComponent && <ChatComponent />}
       </div>
     );
   }
