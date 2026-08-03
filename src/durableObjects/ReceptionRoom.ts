@@ -71,6 +71,7 @@ export class ReceptionRoom extends DurableObject {
     // ─── DEBUG: force-clear stuck/stale room state (e.g. leftover from earlier bugs) ──
     if (url.searchParams.get('reset') === 'true') {
       this.state = this.createDefaultState();
+      await this.ctx.storage.deleteAlarm();
       await this.saveState();
       return Response.json({ reset: true, state: this.state });
     }
@@ -332,21 +333,41 @@ export class ReceptionRoom extends DurableObject {
       this.broadcastMatchResult();
       // ─── FIX: reset the room so it can host a new match instead of staying full forever ──
       this.state = this.createDefaultState();
+      // Clear any pending alarm from this match — nothing left to advance.
+      await this.ctx.storage.deleteAlarm();
       await this.saveState();
       return;
     }
 
-    // ─── FIX: the clearing of clashResult (and the turn/skill-idx reset for the
-    // next round) used to happen synchronously, right after the broadcast above,
-    // with no gap between them. Even though this is a separate broadcastState()
-    // call, it fires on the very next microtask/tick — clients had no realistic
-    // window to render the clash screen before the "next round" state (with
-    // clashResult back to null) overwrote it. We delay this part so the clash
-    // result actually stays visible for a bit before the round advances. ──────
+    // ─── FIX (the real remaining bug): setTimeout() here doesn't survive DO
+    // hibernation. This room uses the Hibernatable WebSockets API
+    // (ctx.acceptWebSocket), which means Cloudflare is free to evict this
+    // Durable Object from memory between messages — that's the whole point
+    // of hibernation, so idle connections don't keep an isolate pinned in
+    // memory. Per Cloudflare's docs, in-memory timers (setTimeout/setInterval)
+    // do NOT survive that eviction; they're silently dropped, no error, no
+    // trace. If that happens here, advanceToNextRound() simply never runs:
+    // p1SkillIdx/p2SkillIdx stay stuck non-null forever, so the next
+    // selectSkill from either player hits the "already selected" early-return
+    // a few lines up and gets silently ignored — no further clashResult is
+    // ever computed or broadcast again. That's exactly "clashed, but the
+    // result stopped showing." The Alarm API is durably persisted (backed by
+    // storage, not the isolate's memory) and is guaranteed to fire even after
+    // the DO is evicted/hibernated, so we use that instead. ─────────────────
     const CLASH_RESULT_DISPLAY_MS = 2500;
-    setTimeout(() => {
-      this.advanceToNextRound().catch(err => console.error('advanceToNextRound failed:', err));
-    }, CLASH_RESULT_DISPLAY_MS);
+    await this.ctx.storage.setAlarm(Date.now() + CLASH_RESULT_DISPLAY_MS);
+  }
+
+  // ─── FIX: alarm() replaces the old setTimeout-based scheduling for
+  // advanceToNextRound(). Durable Object alarms persist in storage and are
+  // redelivered even if the DO was evicted/hibernated in between, unlike
+  // setTimeout. ───────────────────────────────────────────────────────────
+  async alarm() {
+    // Guard in case the room was reset (match ended / forfeit / new match)
+    // between when the alarm was scheduled and when it actually fires —
+    // nothing to advance from in that case.
+    if (this.state.clashResult === null) return;
+    await this.advanceToNextRound().catch(err => console.error('advanceToNextRound failed:', err));
   }
 
   private async advanceToNextRound() {
@@ -429,6 +450,8 @@ export class ReceptionRoom extends DurableObject {
         this.state.winner = winnerKey;
         this.broadcastMatchResult();
         this.state = this.createDefaultState();
+        // Clear any pending alarm from this match — nothing left to advance.
+        await this.ctx.storage.deleteAlarm();
         await this.saveState();
       } else if (loser?.playerName) {
         // Solo player (still queued) disconnected — just free up their seat.
