@@ -445,17 +445,23 @@ export default function ReceptionMode({
     if (identityId === 'arthur_excalibur') {
       const targetWeaponId = 'excalibur_greatsword';
       if (canEquipWeapon(identityId, targetWeaponId)) {
-        const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
-        if (ownedWeapon) {
-          if (owned.equippedWeaponId !== targetWeaponId) {
-            store.setEquippedWeapon(identityId, targetWeaponId);
-          }
-          weaponId = targetWeaponId;
-        } else {
-          setWeaponError('Excalibur weapon not owned.');
-          addLog('[SYSTEM] Excalibur weapon not owned.');
-          return null;
+        let ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
+        if (!ownedWeapon) {
+          // Arthur is a free starter identity and is always supposed to
+          // come with his signature weapon (see gameStore's INITIAL_STATE /
+          // onRehydrateStorage backfill). If it's still missing here — an
+          // older save, a persistence path that skipped that backfill,
+          // whatever — grant it now instead of hard-blocking matchmaking
+          // with "not owned" for a weapon the player was never meant to
+          // have to earn.
+          store.grantWeapon(targetWeaponId);
+          addLog('[SYSTEM] Granted starter weapon: Excalibur Greatsword.');
+          ownedWeapon = { weaponId: targetWeaponId, level: 1, exp: 0 };
         }
+        if (owned.equippedWeaponId !== targetWeaponId) {
+          store.setEquippedWeapon(identityId, targetWeaponId);
+        }
+        weaponId = targetWeaponId;
       } else {
         setWeaponError('Cannot equip Excalibur on this identity.');
         addLog('[SYSTEM] Cannot equip Excalibur on this identity.');
