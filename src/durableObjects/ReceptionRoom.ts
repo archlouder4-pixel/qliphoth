@@ -40,6 +40,32 @@ export class ReceptionRoom extends DurableObject {
     return !!this.state[key]?.playerName;
   }
 
+  // ─── FIX: the client sends `stats: {...}` + `baseSkills`, but the frontend
+  // renders flat fields (me.hp, me.maxHp, me.skills, me.ultimateBar, etc).
+  // Flatten here so both sides agree on the shape. ──────────────────────────
+  private buildPlayerState(payload: any, userId?: string) {
+    const stats = payload?.stats || {};
+    return {
+      ...stats, // hp, maxHp, atk, def, spd, sp, score, lives, shield, resolveStacks, witherStacks, bleedStacks, ultimateBar, transformationActive, transformationTurnsLeft
+      playerName: payload?.playerName || 'Player',
+      identityId: payload?.identityId,
+      weaponId: payload?.weaponId,
+      giftIds: payload?.giftIds || [],
+      classes: payload?.classes || [],
+      classCategory: payload?.classCategory || 'Attacker',
+      classEffect: payload?.classEffect || 0,
+      baseSkills: payload?.baseSkills || [],
+      transformedSkills: payload?.transformedSkills || [],
+      skills: (payload?.baseSkills && payload.baseSkills.length > 0) ? payload.baseSkills : [],
+      hasUltimate: payload?.hasUltimate || false,
+      transformationTrigger: payload?.transformationTrigger || 'none',
+      ultimateDuration: payload?.ultimateDuration || 0,
+      transformationPassive: payload?.transformationPassive || null,
+      weaponPassive: payload?.weaponPassive || '',
+      userId,
+    };
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     // ─── DEBUG: force-clear stuck/stale room state (e.g. leftover from earlier bugs) ──
@@ -83,7 +109,7 @@ export class ReceptionRoom extends DurableObject {
 
       const idx: 0 | 1 = p1Taken ? 1 : 0;
       const playerKey = idx === 0 ? 'p1' : 'p2';
-      this.state[playerKey] = { ...(data.payload || {}), userId: data.userId };
+      this.state[playerKey] = this.buildPlayerState(data.payload, data.userId);
       ws.serializeAttachment({ playerIndex: idx });
       await this.saveState();
 
@@ -142,7 +168,7 @@ export class ReceptionRoom extends DurableObject {
     if (data.type === 'join') {
       const idx = this.state.p1.playerName ? 1 : 0;
       const playerKey = idx === 0 ? 'p1' : 'p2';
-      this.state[playerKey] = { ...data.playerData, userId: data.userId };
+      this.state[playerKey] = this.buildPlayerState(data.playerData, data.userId);
       this.state.phase = 'p1Select';
       ws.serializeAttachment({ playerIndex: idx });
       await this.saveState();
@@ -173,22 +199,22 @@ export class ReceptionRoom extends DurableObject {
     const p2Skill = this.state.p2.skills[this.state.p2SkillIdx!];
     if (!p1Skill || !p2Skill) return;
 
-    const p1IsUlt = p1Skill.isUltimate && this.state.p1.stats.ultimateBar >= 100;
-    const p2IsUlt = p2Skill.isUltimate && this.state.p2.stats.ultimateBar >= 100;
+    const p1IsUlt = p1Skill.isUltimate && this.state.p1.ultimateBar >= 100;
+    const p2IsUlt = p2Skill.isUltimate && this.state.p2.ultimateBar >= 100;
 
     if (p1IsUlt) {
-      this.state.p1.stats.ultimateBar = 0;
+      this.state.p1.ultimateBar = 0;
       if (this.state.p1.transformationTrigger === 'ultimate' && this.state.p1.transformedSkills.length > 0) {
-        this.state.p1.stats.transformationActive = true;
-        this.state.p1.stats.transformationTurnsLeft = this.state.p1.ultimateDuration || 8;
+        this.state.p1.transformationActive = true;
+        this.state.p1.transformationTurnsLeft = this.state.p1.ultimateDuration || 8;
         this.state.p1.skills = this.state.p1.transformedSkills;
       }
     }
     if (p2IsUlt) {
-      this.state.p2.stats.ultimateBar = 0;
+      this.state.p2.ultimateBar = 0;
       if (this.state.p2.transformationTrigger === 'ultimate' && this.state.p2.transformedSkills.length > 0) {
-        this.state.p2.stats.transformationActive = true;
-        this.state.p2.stats.transformationTurnsLeft = this.state.p2.ultimateDuration || 8;
+        this.state.p2.transformationActive = true;
+        this.state.p2.transformationTurnsLeft = this.state.p2.ultimateDuration || 8;
         this.state.p2.skills = this.state.p2.transformedSkills;
       }
     }
@@ -201,28 +227,28 @@ export class ReceptionRoom extends DurableObject {
     let p1Dmg = 0, p2Dmg = 0, won = false;
     if (result.playerTotal >= result.enemyTotal) {
       const diff = Math.max(1, result.playerTotal - result.enemyTotal + result.playerTotal / 4);
-      p1Dmg = Math.max(1, Math.floor((this.state.p1.stats.atk * (diff / 6) - this.state.p2.stats.def * 0.5) / 16) * p1Mult * (0.85 + Math.random() * 0.3));
+      p1Dmg = Math.max(1, Math.floor((this.state.p1.atk * (diff / 6) - this.state.p2.def * 0.5) / 16) * p1Mult * (0.85 + Math.random() * 0.3));
       p1Dmg = Math.min(p1Dmg, 75);
-      this.state.p2.stats.hp = Math.max(0, this.state.p2.stats.hp - p1Dmg);
+      this.state.p2.hp = Math.max(0, this.state.p2.hp - p1Dmg);
       won = true;
       if (this.state.p1.hasUltimate) {
         const gain = 0.0025 + Math.random() * 0.0275;
-        this.state.p1.stats.ultimateBar = Math.min(100, this.state.p1.stats.ultimateBar + gain);
+        this.state.p1.ultimateBar = Math.min(100, this.state.p1.ultimateBar + gain);
       }
     } else {
       const diff = Math.max(1, result.enemyTotal - result.playerTotal + result.enemyTotal / 4);
-      p2Dmg = Math.max(1, Math.floor((this.state.p2.stats.atk * (diff / 6) - this.state.p1.stats.def * 0.5) / 16) * p2Mult * (0.85 + Math.random() * 0.3));
+      p2Dmg = Math.max(1, Math.floor((this.state.p2.atk * (diff / 6) - this.state.p1.def * 0.5) / 16) * p2Mult * (0.85 + Math.random() * 0.3));
       p2Dmg = Math.min(p2Dmg, 75);
-      this.state.p1.stats.hp = Math.max(0, this.state.p1.stats.hp - p2Dmg);
+      this.state.p1.hp = Math.max(0, this.state.p1.hp - p2Dmg);
       won = false;
       if (this.state.p2.hasUltimate) {
         const gain = 0.0025 + Math.random() * 0.0275;
-        this.state.p2.stats.ultimateBar = Math.min(100, this.state.p2.stats.ultimateBar + gain);
+        this.state.p2.ultimateBar = Math.min(100, this.state.p2.ultimateBar + gain);
       }
     }
 
-    if (p1Skill.type !== 'ego') this.state.p1.stats.sp = Math.min(100, this.state.p1.stats.sp + 10);
-    if (p2Skill.type !== 'ego') this.state.p2.stats.sp = Math.min(100, this.state.p2.stats.sp + 10);
+    if (p1Skill.type !== 'ego') this.state.p1.sp = Math.min(100, this.state.p1.sp + 10);
+    if (p2Skill.type !== 'ego') this.state.p2.sp = Math.min(100, this.state.p2.sp + 10);
 
     this.state.clashResult = {
       p: result.playerTotal,
@@ -232,24 +258,24 @@ export class ReceptionRoom extends DurableObject {
       won,
       dmg: won ? p1Dmg : p2Dmg,
       actorName: won ? this.state.p1.playerName : this.state.p2.playerName,
-      ultimateGain: won ? (this.state.p1.hasUltimate ? (this.state.p1.stats.ultimateBar / 100) : 0) : 0,
+      ultimateGain: won ? (this.state.p1.hasUltimate ? (this.state.p1.ultimateBar / 100) : 0) : 0,
     };
 
-    if (this.state.p1.stats.hp <= 0 || this.state.p2.stats.hp <= 0) {
-      const p1Won = this.state.p2.stats.hp <= 0;
+    if (this.state.p1.hp <= 0 || this.state.p2.hp <= 0) {
+      const p1Won = this.state.p2.hp <= 0;
       this.state.winner = p1Won ? 'p1' : 'p2';
       const scoreChange = 20;
-      const p1NewScore = this.state.p1.stats.score + (p1Won ? scoreChange : -scoreChange);
-      const p2NewScore = this.state.p2.stats.score + (p1Won ? -scoreChange : scoreChange);
-      const p1Lives = this.state.p1.stats.lives - (p1Won ? 0 : 1);
-      const p2Lives = this.state.p2.stats.lives - (p1Won ? 1 : 0);
+      const p1NewScore = this.state.p1.score + (p1Won ? scoreChange : -scoreChange);
+      const p2NewScore = this.state.p2.score + (p1Won ? -scoreChange : scoreChange);
+      const p1Lives = this.state.p1.lives - (p1Won ? 0 : 1);
+      const p2Lives = this.state.p2.lives - (p1Won ? 1 : 0);
       const p1FinalLives = p1Lives <= 0 ? 5 : p1Lives;
       const p2FinalLives = p2Lives <= 0 ? 5 : p2Lives;
       const p1FinalScore = p1Lives <= 0 ? p1NewScore - 50 : p1NewScore;
       const p2FinalScore = p2Lives <= 0 ? p2NewScore - 50 : p2NewScore;
 
-      this.state.scoreChanges = { p1: p1FinalScore - this.state.p1.stats.score, p2: p2FinalScore - this.state.p2.stats.score };
-      this.state.lifeChanges = { p1: p1FinalLives - this.state.p1.stats.lives, p2: p2FinalLives - this.state.p2.stats.lives };
+      this.state.scoreChanges = { p1: p1FinalScore - this.state.p1.score, p2: p2FinalScore - this.state.p2.score };
+      this.state.lifeChanges = { p1: p1FinalLives - this.state.p1.lives, p2: p2FinalLives - this.state.p2.lives };
       this.state.newRanks = {
         p1: getRankInfo(p1FinalScore).name,
         p2: getRankInfo(p2FinalScore).name,
@@ -267,17 +293,17 @@ export class ReceptionRoom extends DurableObject {
     this.state.phase = this.state.turn === 'p1' ? 'p1Select' : 'p2Select';
     this.state.clashResult = null;
 
-    if (this.state.p1.stats.transformationActive) {
-      this.state.p1.stats.transformationTurnsLeft -= 1;
-      if (this.state.p1.stats.transformationTurnsLeft <= 0) {
-        this.state.p1.stats.transformationActive = false;
+    if (this.state.p1.transformationActive) {
+      this.state.p1.transformationTurnsLeft -= 1;
+      if (this.state.p1.transformationTurnsLeft <= 0) {
+        this.state.p1.transformationActive = false;
         this.state.p1.skills = this.state.p1.baseSkills;
       }
     }
-    if (this.state.p2.stats.transformationActive) {
-      this.state.p2.stats.transformationTurnsLeft -= 1;
-      if (this.state.p2.stats.transformationTurnsLeft <= 0) {
-        this.state.p2.stats.transformationActive = false;
+    if (this.state.p2.transformationActive) {
+      this.state.p2.transformationTurnsLeft -= 1;
+      if (this.state.p2.transformationTurnsLeft <= 0) {
+        this.state.p2.transformationActive = false;
         this.state.p2.skills = this.state.p2.baseSkills;
       }
     }
@@ -319,19 +345,19 @@ export class ReceptionRoom extends DurableObject {
       // queued (no opponent yet) — which corrupted the room state and blocked new matches.
       if (loser?.playerName && winner?.playerName) {
         const scoreChange = 20;
-        const winnerNewScore = winner.stats.score + scoreChange;
-        const loserNewScore = loser.stats.score - scoreChange;
-        const loserLives = loser.stats.lives - 1;
+        const winnerNewScore = winner.score + scoreChange;
+        const loserNewScore = loser.score - scoreChange;
+        const loserLives = loser.lives - 1;
         const loserFinalLives = loserLives <= 0 ? 5 : loserLives;
         const loserFinalScore = loserLives <= 0 ? loserNewScore - 50 : loserNewScore;
 
         this.state.scoreChanges = {
-          [winnerKey]: winnerNewScore - winner.stats.score,
-          [loserKey]: loserFinalScore - loser.stats.score,
+          [winnerKey]: winnerNewScore - winner.score,
+          [loserKey]: loserFinalScore - loser.score,
         };
         this.state.lifeChanges = {
           [winnerKey]: 0,
-          [loserKey]: loserFinalLives - loser.stats.lives,
+          [loserKey]: loserFinalLives - loser.lives,
         };
         this.state.newRanks = {
           [winnerKey]: getRankInfo(winnerNewScore).name,
