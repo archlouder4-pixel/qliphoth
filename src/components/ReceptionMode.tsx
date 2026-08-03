@@ -1,5 +1,5 @@
 // ReceptionMode.tsx – 1v1 Duel with WebSocket
-// Now with Global Chat (visible only during combat or result)
+// Added: Global Chat with React.lazy to avoid circular dependency.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -18,7 +18,9 @@ import {
 import { weapons, canEquipWeapon } from '../data/weapons';
 import { egoGifts } from '../data/egoGifts';
 import { applyWeaponPassive } from '../data/weaponPassives';
-import GlobalChat from '../components/GlobalChat';
+
+// ─── Lazy import GlobalChat ──────────────────────────────────────────
+const GlobalChat = React.lazy(() => import('../components/GlobalChat'));
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
@@ -1245,11 +1247,14 @@ export default function ReceptionMode({
   return (
     <div className="min-h-screen bg-[#070a14] text-white font-sans p-4">
       <div className="max-w-4xl mx-auto space-y-4">
-        {/* The entire content (lobby/combat/result) is rendered above */}
-        {/* We need to render the chat after the content but still inside the outer div */}
+        {/* All existing content (lobby/combat/result) is rendered above */}
       </div>
-      {/* ─── GLOBAL CHAT ─── */}
-      {(phase === 'combat' || phase === 'result') && <GlobalChat />}
+      {/* ─── Global Chat ─── */}
+      {(phase === 'combat' || phase === 'result') && (
+        <React.Suspense fallback={<div className="h-12 w-12" />}>
+          <GlobalChat />
+        </React.Suspense>
+      )}
     </div>
   );
 }
