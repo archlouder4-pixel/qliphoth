@@ -298,6 +298,18 @@ export class ReceptionRoom extends DurableObject {
       ultimateGain: won ? (this.state.p1.hasUltimate ? (this.state.p1.ultimateBar / 100) : 0) : 0,
     };
 
+    // ─── FIX: broadcast the clash result NOW, while this.state.clashResult is
+    // still populated. Previously the only broadcastState() call in this
+    // function ran at the very end, by which point clashResult had already
+    // been reset back to null a few lines below — so clients never actually
+    // received a message with clashResult set, even though the HP mutation
+    // above was already baked into that same final broadcast. That's why it
+    // looked like the clash "resolved" (HP changed, log updated) without the
+    // clash result screen ever appearing: the populated state was computed
+    // but never sent. We now ship this intermediate state immediately. ────
+    await this.saveState();
+    this.broadcastState();
+
     if (this.state.p1.hp <= 0 || this.state.p2.hp <= 0) {
       const p1Won = this.state.p2.hp <= 0;
       this.state.winner = p1Won ? 'p1' : 'p2';
@@ -324,6 +336,20 @@ export class ReceptionRoom extends DurableObject {
       return;
     }
 
+    // ─── FIX: the clearing of clashResult (and the turn/skill-idx reset for the
+    // next round) used to happen synchronously, right after the broadcast above,
+    // with no gap between them. Even though this is a separate broadcastState()
+    // call, it fires on the very next microtask/tick — clients had no realistic
+    // window to render the clash screen before the "next round" state (with
+    // clashResult back to null) overwrote it. We delay this part so the clash
+    // result actually stays visible for a bit before the round advances. ──────
+    const CLASH_RESULT_DISPLAY_MS = 2500;
+    setTimeout(() => {
+      this.advanceToNextRound().catch(err => console.error('advanceToNextRound failed:', err));
+    }, CLASH_RESULT_DISPLAY_MS);
+  }
+
+  private async advanceToNextRound() {
     this.state.p1SkillIdx = null;
     this.state.p2SkillIdx = null;
     this.state.turn = this.state.turn === 'p1' ? 'p2' : 'p1';
