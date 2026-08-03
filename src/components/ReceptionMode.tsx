@@ -1247,7 +1247,7 @@ export default function ReceptionMode({
   return (
     <div className="min-h-screen bg-[#070a14] text-white font-sans p-4">
       <div className="max-w-4xl mx-auto space-y-4">
-        {/* All existing content (lobby/combat/result) is rendered above */}
+        {/* The lobby/combat/result content is rendered above conditionally */}
       </div>
       {/* ─── Global Chat ─── */}
       {(phase === 'combat' || phase === 'result') && (
