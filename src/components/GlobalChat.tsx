@@ -34,14 +34,9 @@ export default function GlobalChat() {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'chat') {
-          // Previously this appended via `setMessages(prev => [...])` and
-          // then separately checked `if (messages.length > 50)` to trim —
-          // but `messages` there was the value captured when `connect()`
-          // was first called at mount (this handler is bound once), so it
-          // was permanently 0 and the 50-message cap never actually
-          // triggered. Do the append AND the cap in one functional update
-          // so it's always based on the real current list.
-          setMessages(prev => [...prev, { user: data.user, text: data.text, timestamp: data.timestamp }].slice(-50));
+          setMessages(prev => [...prev, { user: data.user, text: data.text, timestamp: data.timestamp }]);
+          // Keep only last 50 messages to avoid memory issues
+          if (messages.length > 50) setMessages(prev => prev.slice(-50));
         }
       } catch (err) {
         console.error('Chat parse error:', err);
