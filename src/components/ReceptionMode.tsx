@@ -1,5 +1,5 @@
 // ReceptionMode.tsx – 1v1 Duel with WebSocket
-// Added: Global Chat with React.lazy to avoid circular dependency.
+// Now with Global Chat (visible only during combat or result) – dynamically loaded
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -18,9 +18,6 @@ import {
 import { weapons, canEquipWeapon } from '../data/weapons';
 import { egoGifts } from '../data/egoGifts';
 import { applyWeaponPassive } from '../data/weaponPassives';
-
-// ─── Lazy import GlobalChat ──────────────────────────────────────────
-const GlobalChat = React.lazy(() => import('../components/GlobalChat'));
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
@@ -168,6 +165,18 @@ export default function ReceptionMode({
   const [ultBarValue, setUltBarValue] = useState(0);
   const [passiveActivating, setPassiveActivating] = useState(false);
   const [weaponError, setWeaponError] = useState<string | null>(null);
+
+  // --- Dynamic import for GlobalChat ---
+  const [ChatComponent, setChatComponent] = useState<React.ComponentType | null>(null);
+  useEffect(() => {
+    if (phase === 'combat' || phase === 'result') {
+      import('../components/GlobalChat')
+        .then(module => setChatComponent(() => module.default))
+        .catch(err => console.error('Failed to load GlobalChat:', err));
+    } else {
+      setChatComponent(null); // unload when not needed
+    }
+  }, [phase]);
 
   const myPlayerIndexRef = useRef<0 | 1>(0);
   const roomStateRef = useRef<any>(null);
@@ -745,6 +754,7 @@ export default function ReceptionMode({
             </div>
           </TacticalPanel>
         </div>
+        {/* No chat in lobby */}
       </div>
     );
   }
@@ -757,6 +767,7 @@ export default function ReceptionMode({
           <TacticalPanel variant="warning" className="text-center">
             <p className="text-amber-400 font-bold animate-pulse">⏳ Waiting for game state...</p>
           </TacticalPanel>
+          {ChatComponent && <ChatComponent />}
         </div>
       );
     }
@@ -826,6 +837,7 @@ export default function ReceptionMode({
               </div>
             </TacticalPanel>
           </div>
+          {ChatComponent && <ChatComponent />}
         </div>
       );
     }
@@ -874,6 +886,7 @@ export default function ReceptionMode({
               </div>
             </TacticalPanel>
           </div>
+          {ChatComponent && <ChatComponent />}
         </div>
       );
     }
@@ -1174,6 +1187,8 @@ export default function ReceptionMode({
             </div>
           </TacticalPanel>
         </div>
+        {/* ─── GLOBAL CHAT ─── */}
+        {ChatComponent && <ChatComponent />}
       </div>
     );
   }
@@ -1239,22 +1254,12 @@ export default function ReceptionMode({
             </div>
           </TacticalPanel>
         </div>
+        {/* ─── GLOBAL CHAT ─── */}
+        {ChatComponent && <ChatComponent />}
       </div>
     );
   }
 
-  // ─── Main Render ────────────────────────────────────────────────────
-  return (
-    <div className="min-h-screen bg-[#070a14] text-white font-sans p-4">
-      <div className="max-w-4xl mx-auto space-y-4">
-        {/* The lobby/combat/result content is rendered above conditionally */}
-      </div>
-      {/* ─── Global Chat ─── */}
-      {(phase === 'combat' || phase === 'result') && (
-        <React.Suspense fallback={<div className="h-12 w-12" />}>
-          <GlobalChat />
-        </React.Suspense>
-      )}
-    </div>
-  );
+  // ─── Fallback ────────────────────────────────────────────────────
+  return null;
 }
