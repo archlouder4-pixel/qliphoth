@@ -1417,4 +1417,214 @@ export default function ExplorationView() {
           <div className="text-right">
             {synergyType && (
               <span className="text-xs px-2 py-0.5 border border-amber-400 text-amber-400">
-                {synergyType === 'amplifier' ? '⚡ Synergy: Offensive'
+                {synergyType === 'amplifier' ? '⚡ Synergy: Offensive' : '💚 Synergy: Defensive'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          {identityStates.map((state, idx) => {
+            const isActive = idx === activeIdentityIndex;
+            const hpPct = state.maxHp > 0 ? (state.hp / state.maxHp) * 100 : 0;
+            return (
+              <div
+                key={state.identityId}
+                className={`border p-3 transition-all ${isActive ? 'border-cyan-400 bg-cyan-400/10' : state.hp <= 0 ? 'border-red-500/30 bg-red-500/10 opacity-50' : 'border-gray-700 bg-gray-900/80'}`}
+                style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">{identities.find(i => i.id === state.identityId)?.portrait || '👤'}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-bold text-sm truncate">{state.name}</p>
+                    <p className="text-[10px] text-gray-400">{state.playerName} · {state.classCategory}</p>
+                  </div>
+                  {state.transformationActive && <span className="text-amber-400 text-sm">⭐</span>}
+                  {isActive && <span className="text-cyan-400 text-xs">ACTIVE</span>}
+                </div>
+                <div className="mt-2 space-y-1">
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>HP</span>
+                    <span>{Math.round(state.hp)}/{state.maxHp}</span>
+                  </div>
+                  <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div className={`h-full transition-all ${hpPct > 50 ? 'bg-green-400' : hpPct > 25 ? 'bg-yellow-400' : 'bg-red-400'}`}
+                         style={{ width: `${Math.max(0, hpPct)}%` }} />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>SP</span>
+                    <span>{Math.round(state.sp)}/{state.maxSp}</span>
+                  </div>
+                  <div className="h-1 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-cyan-400" style={{ width: `${(state.sp / state.maxSp) * 100}%` }} />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>ULT</span>
+                    <span>{Math.round(state.ultimate)}%</span>
+                  </div>
+                  <div className="h-1 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-amber-400" style={{ width: `${state.ultimate}%` }} />
+                  </div>
+                  {state.shield > 0 && (
+                    <div className="text-[10px] text-cyan-400">🛡 {Math.round(state.shield)}</div>
+                  )}
+                  {state.transformationActive && (
+                    <div className="text-[10px] text-amber-400">⭐ Transformed ({state.transformationTurnsLeft}t)</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+          <h3 className="text-xs font-mono font-bold text-gray-400 mb-2">⚔️ ENEMIES</h3>
+          <div className="space-y-2">
+            {enemies.map((enemy, idx) => {
+              const isSelected = idx === selectedEnemyIndex && enemy.currentHp > 0;
+              const hpPct = enemy.maxHp > 0 ? (enemy.currentHp / enemy.maxHp) * 100 : 0;
+              return (
+                <div
+                  key={idx}
+                  onClick={() => enemy.currentHp > 0 && setSelectedEnemyIndex(idx)}
+                  className={`flex items-center justify-between p-2 border transition-all cursor-pointer ${isSelected ? 'border-cyan-400 bg-cyan-400/10' : enemy.currentHp > 0 ? 'border-gray-700 bg-gray-900/50 hover:border-cyan-400/30' : 'border-gray-800 opacity-40'}`}
+                  style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px))' }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{enemy.portrait || '👾'}</span>
+                    <div>
+                      <p className="font-bold text-white text-sm flex items-center gap-2">
+                        {enemy.name}
+                        {enemy.isBoss && <span className="text-[10px] text-amber-400 font-bold">⭐BOSS</span>}
+                      </p>
+                      <p className="text-[10px] text-gray-400">
+                        {DAMAGE_TYPE_INFO[enemy.damageType]?.icon || ''} {enemy.damageType} · 
+                        {INFUSION_INFO[enemy.infusion]?.icon || ''} {enemy.infusion}
+                        · Resists: {enemy.resistDamageType} / {enemy.resistInfusion}
+                      </p>
+                      {enemy.corrosionTurns > 0 && (
+                        <span className="text-[10px] text-red-400">🛡️ Corroded ({enemy.corrosionTurns}t)</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-mono font-bold text-red-400">{Math.round(hpPct)}%</p>
+                    <div className="h-1.5 w-20 bg-gray-700 rounded-full overflow-hidden">
+                      <div className={`h-full transition-all ${hpPct > 50 ? 'bg-red-400' : hpPct > 25 ? 'bg-orange-400' : 'bg-red-600'}`}
+                           style={{ width: `${Math.max(0, hpPct)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {!isFinished && turn === 'player' && (
+          <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+            <p className="text-xs font-mono font-bold text-gray-400 mb-2">SELECT SKILL</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+              {activeSkills.map((skill, idx) => {
+                const isEgo = skill.type === 'ego';
+                const canUse = !isEgo || (activeIdentity && activeIdentity.ultimate >= 100);
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => setSelectedSkillIndex(idx)}
+                    disabled={!canUse}
+                    className={`relative p-2 border transition-all ${selectedSkillIndex === idx ? 'border-cyan-400 bg-cyan-400/20' : 'border-gray-700 bg-gray-900/50 hover:border-cyan-400/30'} ${!canUse ? 'opacity-40 cursor-not-allowed' : ''}`}
+                    style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px))' }}
+                  >
+                    <span className={`text-[10px] px-1.5 py-0.5 font-bold ${isEgo ? 'bg-amber-400/20 text-amber-400' : 'bg-gray-700 text-gray-400'}`}>
+                      {isEgo ? 'EGO' : 'NORM'}
+                    </span>
+                    <p className="text-white text-sm font-bold truncate">{skill.name}</p>
+                    <div className="flex gap-1 text-[10px] text-gray-400">
+                      <span>P:{skill.power}</span>
+                      <span>C:{skill.coins}</span>
+                      {skill.damageType && <span>{DAMAGE_TYPE_INFO[skill.damageType]?.icon}</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={handlePlayerAction}
+              disabled={!activeIdentity || activeIdentity.hp <= 0}
+              className="w-full py-3 bg-cyan-400/20 border border-cyan-400 text-cyan-400 font-mono font-bold hover:bg-cyan-400 hover:text-gray-900 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+            >
+              ⚔️ EXECUTE CLASH
+            </button>
+          </div>
+        )}
+
+        {turn === 'resolve' && !isFinished && (
+          <button
+            onClick={resolvePhase}
+            className="w-full py-3 bg-amber-400/20 border border-amber-400 text-amber-400 font-mono font-bold hover:bg-amber-400 hover:text-gray-900 transition-all"
+            style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+          >
+            ⏳ RESOLVE
+          </button>
+        )}
+
+        {turn === 'enemy' && !isFinished && (
+          <div className="border border-gray-700 bg-gray-900/80 p-4 text-center text-gray-400">
+            <p>⚔️ Enemy turn in progress...</p>
+          </div>
+        )}
+
+        {clashData && (
+          <div className={`border p-4 ${clashData.won ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}
+               style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}>
+            <p className="text-center font-bold">{clashData.won ? '✅ CLASH WON!' : '❌ CLASH LOST!'}</p>
+            <p className="text-center text-sm text-gray-400">
+              {clashData.actorName} dealt {clashData.dmg} damage.
+            </p>
+          </div>
+        )}
+
+        {isFinished && (
+          <div className={`border p-6 text-center ${phase === 'victory' ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}
+               style={{ clipPath: 'polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px))' }}>
+            <span className="text-6xl">{phase === 'victory' ? '🏆' : '💔'}</span>
+            <h2 className="text-2xl font-bold mt-2">{phase === 'victory' ? 'VICTORY!' : 'DEFEAT'}</h2>
+            {finalScore !== null && (
+              <p className="text-xl font-mono text-cyan-400 mt-2">Score: {finalScore}</p>
+            )}
+            <button
+              onClick={resetExploration}
+              className="mt-4 px-6 py-3 bg-cyan-400/20 border border-cyan-400 text-cyan-400 font-mono font-bold hover:bg-cyan-400 hover:text-gray-900 transition-all"
+              style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+            >
+              🔄 BACK TO MAP
+            </button>
+          </div>
+        )}
+
+        {!isFinished && (
+          <button
+            onClick={retreat}
+            className="w-full py-2 border border-gray-700 text-gray-400 font-mono text-sm hover:border-red-400 hover:text-red-400 transition-all"
+            style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+          >
+            🏳️ RETREAT
+          </button>
+        )}
+
+        <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+          <h3 className="text-xs font-mono font-bold text-gray-400 mb-2">📜 EXPLORATION LOG</h3>
+          <div className="max-h-40 overflow-y-auto font-mono text-xs space-y-0.5 bg-gray-800/30 p-2 rounded">
+            {log.map((l, i) => <p key={i} className="text-gray-400">{l}</p>)}
+          </div>
+        </div>
+
+        {/* ─── GLOBAL CHAT (co-op only) ─── */}
+        {ChatComponent && <ChatComponent />}
+      </div>
+    );
+  }
+
+  return null;
+}
