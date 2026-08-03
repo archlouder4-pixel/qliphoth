@@ -36,6 +36,10 @@ export class ReceptionRoom extends DurableObject {
     await this.ctx.storage.put(this.storageKey, this.state);
   }
 
+  private slotTaken(key: 'p1' | 'p2'): boolean {
+    return !!this.state[key]?.playerName;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.headers.get('Upgrade') === 'websocket') {
@@ -57,6 +61,77 @@ export class ReceptionRoom extends DurableObject {
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
     const session = this.ctx.getWebSocketData(ws) as { playerIndex?: 0 | 1 };
+
+    // ─── FIX: matchmaking entry point — this is what the client actually sends ──────
+    if (data.type === 'findMatch') {
+      // Already assigned a seat in this room (e.g. re-sent request) — ignore duplicates.
+      if (session?.playerIndex !== undefined) return;
+
+      const p1Taken = this.slotTaken('p1');
+      const p2Taken = this.slotTaken('p2');
+
+      if (p1Taken && p2Taken) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Room is full. Please try again shortly.' }));
+        return;
+      }
+
+      const idx: 0 | 1 = p1Taken ? 1 : 0;
+      const playerKey = idx === 0 ? 'p1' : 'p2';
+      this.state[playerKey] = { ...(data.payload || {}), userId: data.userId };
+      this.ctx.setWebSocketData(ws, { playerIndex: idx });
+      await this.saveState();
+
+      const bothFilled = this.slotTaken('p1') && this.slotTaken('p2');
+
+      if (bothFilled) {
+        this.state.phase = 'p1Select';
+        this.state.winner = null;
+        this.state.p1SkillIdx = null;
+        this.state.p2SkillIdx = null;
+        this.state.clashResult = null;
+        await this.saveState();
+
+        // Tell every connected socket its own seat, then send the fresh state.
+        for (const [sock] of this.ctx.getWebSockets()) {
+          const sess = this.ctx.getWebSocketData(sock) as { playerIndex?: 0 | 1 };
+          if (sess?.playerIndex !== undefined) {
+            sock.send(JSON.stringify({ type: 'roomJoined', playerIndex: sess.playerIndex }));
+          }
+        }
+        this.broadcastState();
+      } else {
+        ws.send(JSON.stringify({ type: 'queued' }));
+      }
+      return;
+    }
+
+    // ─── FIX: allow a queued (not-yet-matched) player to back out ────────────────────
+    if (data.type === 'cancelMatch') {
+      const idx = session?.playerIndex;
+      if (idx === undefined) return;
+
+      const key = idx === 0 ? 'p1' : 'p2';
+      const otherKey = idx === 0 ? 'p2' : 'p1';
+
+      // If an opponent has already taken the other seat, the match has started —
+      // cancelling isn't meaningful anymore (they'd need to forfeit instead).
+      if (this.slotTaken(otherKey)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Match already started, cannot cancel.' }));
+        return;
+      }
+
+      this.state[key] = {} as any;
+      this.ctx.setWebSocketData(ws, {});
+      await this.saveState();
+      ws.send(JSON.stringify({ type: 'matchCancelled' }));
+      return;
+    }
+
+    // ─── FIX: respond to the leaderboard request the client sends on connect ────────
+    if (data.type === 'getLeaderboard') {
+      ws.send(JSON.stringify({ type: 'leaderboard', data: [] }));
+      return;
+    }
 
     if (data.type === 'join') {
       const idx = this.state.p1.playerName ? 1 : 0;
@@ -174,6 +249,9 @@ export class ReceptionRoom extends DurableObject {
         p2: getRankInfo(p2FinalScore).name,
       };
       this.broadcastMatchResult();
+      // ─── FIX: reset the room so it can host a new match instead of staying full forever ──
+      this.state = this.createDefaultState();
+      await this.saveState();
       return;
     }
 
@@ -229,7 +307,11 @@ export class ReceptionRoom extends DurableObject {
       const winnerKey = idx === 0 ? 'p2' : 'p1';
       const loser = this.state[loserKey];
       const winner = this.state[winnerKey];
-      if (loser && winner) {
+
+      // ─── FIX: only treat this as a forfeit if a real match was underway ──────────
+      // Previously this ran on ANY disconnect, including a solo player who was still
+      // queued (no opponent yet) — which corrupted the room state and blocked new matches.
+      if (loser?.playerName && winner?.playerName) {
         const scoreChange = 20;
         const winnerNewScore = winner.stats.score + scoreChange;
         const loserNewScore = loser.stats.score - scoreChange;
@@ -251,6 +333,12 @@ export class ReceptionRoom extends DurableObject {
         };
         this.state.winner = winnerKey;
         this.broadcastMatchResult();
+        this.state = this.createDefaultState();
+        await this.saveState();
+      } else if (loser?.playerName) {
+        // Solo player (still queued) disconnected — just free up their seat.
+        this.state[loserKey] = {} as any;
+        await this.saveState();
       }
     }
   }
