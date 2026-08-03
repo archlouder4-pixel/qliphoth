@@ -1,4 +1,4 @@
-// src/store/gameStore.ts – Full file with duel score 0, auto-equip, core passive, defense
+export default useGameStore;// src/store/gameStore.ts – Full file with duel score 0, auto-equip, core passive, defense
 // FIX: deployAbnormality now uses actual abnormality data and correct deploy cost.
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
@@ -1961,13 +1961,33 @@ const useGameStore = create<GameState>()(
         if (!identity) return;
         const weapon = weapons.find(w => w.id === weaponId);
         if (!weapon) return;
-        if (!canEquipWeapon(identityId, weapon)) return;
+        // Was `canEquipWeapon(identityId, weapon)` — passing the whole weapon
+        // OBJECT instead of its id string. canEquipWeapon does
+        // `weapons.find(w => w.id === weaponId)` internally, so comparing a
+        // string id to an object was always false — this made
+        // setEquippedWeapon silently no-op on every single call, for every
+        // identity, everywhere in the app.
+        if (!canEquipWeapon(identityId, weaponId)) return;
         const ownedWeapon = state.ownedWeapons.find(w => w.weaponId === weaponId);
         if (!ownedWeapon) return;
         set((s) => ({
           ownedIdentities: s.ownedIdentities.map(o =>
             o.identityId === identityId ? { ...o, equippedWeaponId: weaponId } : o
           ),
+        }));
+      },
+
+      // Adds a weapon to ownedWeapons if not already owned. Used to
+      // self-heal cases like Arthur's free signature weapon not being
+      // present in a save (e.g. from an older client version or a
+      // persistence path that bypassed the onRehydrateStorage backfill).
+      grantWeapon: (weaponId: string) => {
+        const state = get();
+        if (state.ownedWeapons.some(w => w.weaponId === weaponId)) return;
+        const weapon = weapons.find(w => w.id === weaponId);
+        if (!weapon) return;
+        set((s) => ({
+          ownedWeapons: [...s.ownedWeapons, { weaponId, level: 1, exp: 0 }],
         }));
       },
 
@@ -2742,8 +2762,6 @@ const useGameStore = create<GameState>()(
     }
   )
 );
-
-export default useGameStore;
 
 // ─── Helper: pullOne ──────────────────────────────────────────────────
 function pullOne(banner: BannerState, bannerType: BannerType): GachaResult {
