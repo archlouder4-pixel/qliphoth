@@ -1,5 +1,13 @@
 // ReceptionMode.tsx – 1v1 Duel with WebSocket
 // Added: global chat (visible only during combat/result), custom WebSocket integration, fixed "Find Match" button.
+// FIX (this pass): eliminated the "stuck on Waiting for opponent" soft lock by removing the
+// Array.indexOf(skill) lookup used to compute fullIndex for skill selection. indexOf() returned
+// -1 whenever `skill` wasn't reference-equal to an entry in me.skills (e.g. the identity-derived
+// fallback list, or transformed skill objects), which sent an invalid index (-1) to the server.
+// The server would then fail to resolve the clash and never reset selection state, locking both
+// players on "Skill submitted – waiting for opponent" / "Waiting for opponent" forever — whether
+// or not the Excalibur-style auto-select passive fired. Skills are now tagged with their real
+// index (__idx) at filter time, so fullIndex always points at a real position in me.skills.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -213,6 +221,9 @@ export default function ReceptionMode({
     setPassiveActivating(true);
     addLogRef.current(`[${identity.name}] Passive awakening!`);
 
+    // ─── FIX: this already used a real array index (Math.random() * length),
+    // so the passive-trigger path itself was fine. The soft lock came from
+    // the manual-select path below via indexOf(); see the render section.
     const randomIdx = Math.floor(Math.random() * me.skills.length);
     setSelectedSkill(randomIdx);
 
@@ -362,6 +373,13 @@ export default function ReceptionMode({
           setShowClashResult(false);
           if (state.p1SkillIdx === null && state.p2SkillIdx === null) {
             setPassiveActivating(false);
+            // ─── FIX: if the server had to reset a stuck round (invalid index
+            // safety net in resolveClash), both skill indices come back to null
+            // without a clashResult and without a winner. Make sure the client
+            // also clears its own "submitted" flags so the UI returns to a
+            // selectable state instead of staying frozen on "waiting". ────────
+            setIsSubmitting(false);
+            setSelectedSkill(null);
           }
         }
 
@@ -388,7 +406,16 @@ export default function ReceptionMode({
       }
 
       case 'error': {
+        // ─── FIX: an 'error' from the server (e.g. "Invalid skill selection")
+        // used to only pop an alert and clear `queued`. If it arrived mid-combat
+        // (a rejected skill pick) the client's isSubmitting/selectedSkill flags
+        // were never cleared, which could also present as a stuck "submitted"
+        // UI even though the server correctly rejected the pick. Clear combat
+        // submission state too so the player can simply pick again. ──────────
         setQueued(false);
+        setIsSubmitting(false);
+        setPassiveActivating(false);
+        setSelectedSkill(null);
         alert(`❌ ${data.message}`);
         break;
       }
@@ -1101,17 +1128,30 @@ export default function ReceptionMode({
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
                 {(() => {
-                  let activeSkills = (me.skills || []).filter(
-                    (s: any) => s.type !== 'class' && s.isTransformed === isTransformed
-                  );
+                  // ─── FIX: tag every skill with its real position in me.skills
+                  // (__idx) BEFORE filtering, instead of recovering the index later
+                  // via me.skills.indexOf(skill). indexOf() relies on reference
+                  // equality, and returns -1 whenever `skill` isn't the exact same
+                  // object reference found in me.skills — which happened for the
+                  // identity-derived fallback list below and could happen for
+                  // transformed skill objects too. Sending -1 to the server as a
+                  // "selected skill index" caused resolveClash() to fail to find a
+                  // matching skill, which (before the server-side fix) left both
+                  // players permanently stuck on "Skill submitted – waiting for
+                  // opponent" / "Waiting for opponent". Using __idx guarantees a
+                  // valid index is always sent. ─────────────────────────────────
+                  let activeSkills = (me.skills || [])
+                    .map((s: any, i: number) => ({ ...s, __idx: i }))
+                    .filter((s: any) => s.type !== 'class' && s.isTransformed === isTransformed);
 
                   if (activeSkills.length === 0) {
                     const identity = identities.find(i => i.id === me?.identityId);
                     if (identity) {
                       activeSkills = identity.skills
                         .filter(s => s.type !== 'class')
-                        .map(s => ({
+                        .map((s, i) => ({
                           ...s,
+                          __idx: i,
                           isTransformed: false,
                           isEgo: s.type === 'ego',
                           isUltimate: s.isUltimate || s.type === 'ego',
@@ -1123,14 +1163,14 @@ export default function ReceptionMode({
 
                   if (activeSkills.length === 0) {
                     activeSkills = [
-                      { name: 'Basic Strike', power: 5, coins: 1, type: 'normal1', damageType: 'Physical', isEgo: false, isTransformed: false },
-                      { name: 'Heavy Blow', power: 8, coins: 1, type: 'normal2', damageType: 'Physical', isEgo: false, isTransformed: false },
-                      { name: 'Quick Slash', power: 3, coins: 2, type: 'normal3', damageType: 'Physical', isEgo: false, isTransformed: false },
+                      { name: 'Basic Strike', power: 5, coins: 1, type: 'normal1', damageType: 'Physical', isEgo: false, isTransformed: false, __idx: 0 },
+                      { name: 'Heavy Blow', power: 8, coins: 1, type: 'normal2', damageType: 'Physical', isEgo: false, isTransformed: false, __idx: 1 },
+                      { name: 'Quick Slash', power: 3, coins: 2, type: 'normal3', damageType: 'Physical', isEgo: false, isTransformed: false, __idx: 2 },
                     ];
                   }
 
                   return activeSkills.map((skill: any) => {
-                    const fullIndex = me.skills ? me.skills.indexOf(skill) : activeSkills.indexOf(skill);
+                    const fullIndex = skill.__idx;
                     const isEgo = skill.type === 'ego';
                     const isUltimate = isEgo && skill.isUltimate;
                     const canUse = !isEgo || ultimateReady;
