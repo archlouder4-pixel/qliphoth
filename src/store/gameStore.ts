@@ -1,4 +1,4 @@
-// src/store/gameStore.ts – Full file with duel score 0, auto-equip, core passive, defense
+export default useGameStore;// src/store/gameStore.ts – Full file with duel score 0, auto-equip, core passive, defense
 // FIX: deployAbnormality now uses actual abnormality data and correct deploy cost.
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
