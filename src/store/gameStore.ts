@@ -2948,3 +2948,5 @@ function pullOne(banner: BannerState, bannerType: BannerType): GachaResult {
     return { type: 'material', rarity: 'material', id: picked.id, name: picked.name };
   }
 }
+
+export default useGameStore;
