@@ -1,5 +1,5 @@
 // ReceptionMode.tsx – 1v1 Duel with WebSocket
-// Now with Global Chat (visible only during combat or result) – dynamically loaded
+// Added: global chat (visible only during combat/result), custom WebSocket integration, fixed "Find Match" button.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -18,6 +18,7 @@ import {
 import { weapons, canEquipWeapon } from '../data/weapons';
 import { egoGifts } from '../data/egoGifts';
 import { applyWeaponPassive } from '../data/weaponPassives';
+import GlobalChat from '../components/GlobalChat';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
@@ -165,18 +166,6 @@ export default function ReceptionMode({
   const [ultBarValue, setUltBarValue] = useState(0);
   const [passiveActivating, setPassiveActivating] = useState(false);
   const [weaponError, setWeaponError] = useState<string | null>(null);
-
-  // --- Dynamic import for GlobalChat ---
-  const [ChatComponent, setChatComponent] = useState<React.ComponentType | null>(null);
-  useEffect(() => {
-    if (phase === 'combat' || phase === 'result') {
-      import('../components/GlobalChat')
-        .then(module => setChatComponent(() => module.default))
-        .catch(err => console.error('Failed to load GlobalChat:', err));
-    } else {
-      setChatComponent(null); // unload when not needed
-    }
-  }, [phase]);
 
   const myPlayerIndexRef = useRef<0 | 1>(0);
   const roomStateRef = useRef<any>(null);
@@ -454,7 +443,7 @@ export default function ReceptionMode({
     let weaponId = owned.equippedWeaponId || null;
 
     if (identityId === 'arthur_excalibur') {
-      const targetWeaponId = 'excalibur_greatsword';
+      const targetWeaponId = 'eclipse_blade';
       if (canEquipWeapon(identityId, targetWeaponId)) {
         const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === targetWeaponId);
         if (ownedWeapon) {
@@ -648,11 +637,11 @@ export default function ReceptionMode({
       const owned = store.ownedIdentities.find(o => o.identityId === identityId);
       if (!owned) return 'None';
       let weaponId = owned.equippedWeaponId;
-      if (identityId === 'arthur_excalibur' && weaponId !== 'excalibur_greatsword') {
-        const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === 'excalibur_greatsword');
-        if (ownedWeapon && canEquipWeapon(identityId, 'excalibur_greatsword')) {
-          store.setEquippedWeapon(identityId, 'excalibur_greatsword');
-          weaponId = 'excalibur_greatsword';
+      if (identityId === 'arthur_excalibur' && weaponId !== 'eclipse_blade') {
+        const ownedWeapon = store.ownedWeapons.find(ow => ow.weaponId === 'eclipse_blade');
+        if (ownedWeapon && canEquipWeapon(identityId, 'eclipse_blade')) {
+          store.setEquippedWeapon(identityId, 'eclipse_blade');
+          weaponId = 'eclipse_blade';
         }
       }
       if (!weaponId) return 'None';
@@ -754,7 +743,6 @@ export default function ReceptionMode({
             </div>
           </TacticalPanel>
         </div>
-        {/* No chat in lobby */}
       </div>
     );
   }
@@ -767,7 +755,6 @@ export default function ReceptionMode({
           <TacticalPanel variant="warning" className="text-center">
             <p className="text-amber-400 font-bold animate-pulse">⏳ Waiting for game state...</p>
           </TacticalPanel>
-          {ChatComponent && <ChatComponent />}
         </div>
       );
     }
@@ -837,7 +824,6 @@ export default function ReceptionMode({
               </div>
             </TacticalPanel>
           </div>
-          {ChatComponent && <ChatComponent />}
         </div>
       );
     }
@@ -886,7 +872,6 @@ export default function ReceptionMode({
               </div>
             </TacticalPanel>
           </div>
-          {ChatComponent && <ChatComponent />}
         </div>
       );
     }
@@ -1187,8 +1172,6 @@ export default function ReceptionMode({
             </div>
           </TacticalPanel>
         </div>
-        {/* ─── GLOBAL CHAT ─── */}
-        {ChatComponent && <ChatComponent />}
       </div>
     );
   }
@@ -1254,12 +1237,9 @@ export default function ReceptionMode({
             </div>
           </TacticalPanel>
         </div>
-        {/* ─── GLOBAL CHAT ─── */}
-        {ChatComponent && <ChatComponent />}
       </div>
     );
   }
 
-  // ─── Fallback ────────────────────────────────────────────────────
   return null;
 }
