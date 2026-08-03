@@ -2743,6 +2743,8 @@ const useGameStore = create<GameState>()(
   )
 );
 
+export default useGameStore;
+
 // ─── Helper: pullOne ──────────────────────────────────────────────────
 function pullOne(banner: BannerState, bannerType: BannerType): GachaResult {
   const isFate = bannerType === 'fate' || bannerType === 'rerun_fate';
