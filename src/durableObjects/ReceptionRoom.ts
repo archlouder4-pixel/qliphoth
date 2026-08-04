@@ -25,19 +25,11 @@ export class ReceptionRoom extends DurableObject {
       p1SkillIdx: null,
       p2SkillIdx: null,
       clashResult: null,
-      // ─── FIX (manual continue): tracks which players have pressed "Continue"
-      // on the current clash result screen. The round/match no longer advances
-      // on a timer — it waits until both of these are true. NOTE: if
-      // ReceptionRoomState is declared with an exact/closed shape, add
-      // `clashAck: { p1: boolean; p2: boolean }` and `pendingMatchEnd: boolean`
-      // to that interface in ../types. ───────────────────────────────────────
-      clashAck: { p1: false, p2: false },
-      pendingMatchEnd: false,
       winner: null,
       scoreChanges: { p1: 0, p2: 0 },
       lifeChanges: { p1: 0, p2: 0 },
       newRanks: { p1: 'Manager', p2: 'Manager' },
-    } as ReceptionRoomState;
+    };
   }
 
   private async saveState() {
@@ -79,6 +71,7 @@ export class ReceptionRoom extends DurableObject {
     // ─── DEBUG: force-clear stuck/stale room state (e.g. leftover from earlier bugs) ──
     if (url.searchParams.get('reset') === 'true') {
       this.state = this.createDefaultState();
+      await this.ctx.storage.deleteAlarm();
       await this.saveState();
       return Response.json({ reset: true, state: this.state });
     }
@@ -129,8 +122,6 @@ export class ReceptionRoom extends DurableObject {
         this.state.p1SkillIdx = null;
         this.state.p2SkillIdx = null;
         this.state.clashResult = null;
-        this.state.clashAck = { p1: false, p2: false };
-        this.state.pendingMatchEnd = false;
         await this.saveState();
 
         // Tell every connected socket its own seat, then send the fresh state.
@@ -219,36 +210,6 @@ export class ReceptionRoom extends DurableObject {
       }
       return;
     }
-
-    // ─── FIX (manual continue): the clash result no longer advances on a
-    // server timer — each player must explicitly press "Continue" on the
-    // clash screen. Once BOTH players have acknowledged, either advance to
-    // the next round or, if this clash ended the match, finalize and
-    // broadcast the match result. ─────────────────────────────────────────
-    if (data.type === 'continueClash') {
-      const idx = session?.playerIndex;
-      if (idx === undefined) return;
-      if (!this.state.clashResult) return; // nothing pending to continue from
-      const key = idx === 0 ? 'p1' : 'p2';
-
-      if (!this.state.clashAck) this.state.clashAck = { p1: false, p2: false };
-      if (this.state.clashAck[key]) return; // already acked, ignore duplicate presses
-      this.state.clashAck[key] = true;
-      await this.saveState();
-      this.broadcastState();
-
-      if (this.state.clashAck.p1 && this.state.clashAck.p2) {
-        if (this.state.pendingMatchEnd) {
-          this.broadcastMatchResult();
-          // ─── FIX: reset the room so it can host a new match instead of staying full forever ──
-          this.state = this.createDefaultState();
-          await this.saveState();
-        } else {
-          await this.advanceToNextRound();
-        }
-      }
-      return;
-    }
   }
 
   // ─── FIX: added `async` here ──────────────────────────────────────
@@ -301,26 +262,45 @@ export class ReceptionRoom extends DurableObject {
     if (this.state.p1.classCategory === 'Attacker') p1Mult += this.state.p1.classEffect;
     if (this.state.p2.classCategory === 'Attacker') p2Mult += this.state.p2.classEffect;
 
+    // ─── FIX: ULT gain used to be pure noise (0.25%–3% via Math.random()),
+    // completely disconnected from how decisively the clash was won. Now it's
+    // driven by the clash margin — a narrow win (e.g. 8 vs 7) gives close to
+    // the 0.25% floor, a dominant win (e.g. 8 vs 1) gives close to the 3%
+    // ceiling — while staying within the same overall range. ────────────────
+    const ULT_GAIN_MIN = 0.0025;
+    const ULT_GAIN_MAX = 0.03;
+    const ultGainFromMargin = (winnerTotal: number, loserTotal: number) => {
+      const marginRatio = Math.max(0, Math.min(1, (winnerTotal - loserTotal) / winnerTotal));
+      return ULT_GAIN_MIN + marginRatio * (ULT_GAIN_MAX - ULT_GAIN_MIN);
+    };
+
+    // ─── FIX: ultimateBar is a 0–100 scale (see ultimateReady = ultimateBar
+    // >= 100 on the frontend), but `gain` here is a 0–1 fraction (0.0025 to
+    // 0.03, i.e. "0.25% to 3%"). Adding the raw fraction straight onto a
+    // 0–100 bar only moved it by ~0.03 points per clash — at that rate the
+    // bar would need hundreds of dominant-win clashes to ever fill. Convert
+    // to bar-points (gain * 100) when applying it. ──────────────────────────
+    let p1UltGain = 0, p2UltGain = 0;
     let p1Dmg = 0, p2Dmg = 0, won = false;
     if (result.playerTotal >= result.enemyTotal) {
       const diff = Math.max(1, result.playerTotal - result.enemyTotal + result.playerTotal / 4);
       p1Dmg = Math.max(1, Math.floor((this.state.p1.atk * (diff / 6) - this.state.p2.def * 0.5) / 16) * p1Mult * (0.85 + Math.random() * 0.3));
-      p1Dmg = Math.min(p1Dmg, 75);
+      p1Dmg = Math.round(Math.min(p1Dmg, 75));
       this.state.p2.hp = Math.max(0, this.state.p2.hp - p1Dmg);
       won = true;
       if (this.state.p1.hasUltimate) {
-        const gain = 0.0025 + Math.random() * 0.0275;
-        this.state.p1.ultimateBar = Math.min(100, this.state.p1.ultimateBar + gain);
+        p1UltGain = ultGainFromMargin(result.playerTotal, result.enemyTotal);
+        this.state.p1.ultimateBar = Math.min(100, this.state.p1.ultimateBar + p1UltGain * 100);
       }
     } else {
       const diff = Math.max(1, result.enemyTotal - result.playerTotal + result.enemyTotal / 4);
       p2Dmg = Math.max(1, Math.floor((this.state.p2.atk * (diff / 6) - this.state.p1.def * 0.5) / 16) * p2Mult * (0.85 + Math.random() * 0.3));
-      p2Dmg = Math.min(p2Dmg, 75);
+      p2Dmg = Math.round(Math.min(p2Dmg, 75));
       this.state.p1.hp = Math.max(0, this.state.p1.hp - p2Dmg);
       won = false;
       if (this.state.p2.hasUltimate) {
-        const gain = 0.0025 + Math.random() * 0.0275;
-        this.state.p2.ultimateBar = Math.min(100, this.state.p2.ultimateBar + gain);
+        p2UltGain = ultGainFromMargin(result.enemyTotal, result.playerTotal);
+        this.state.p2.ultimateBar = Math.min(100, this.state.p2.ultimateBar + p2UltGain * 100);
       }
     }
 
@@ -335,17 +315,23 @@ export class ReceptionRoom extends DurableObject {
       won,
       dmg: won ? p1Dmg : p2Dmg,
       actorName: won ? this.state.p1.playerName : this.state.p2.playerName,
-      ultimateGain: won ? (this.state.p1.hasUltimate ? (this.state.p1.ultimateBar / 100) : 0) : 0,
+      // ─── FIX: this used to report `ultimateBar / 100` — the winner's total
+      // accumulated bar — mislabeled as the gain from this clash. Report the
+      // actual amount gained this clash instead. ───────────────────────────
+      ultimateGain: won ? p1UltGain : p2UltGain,
     };
 
-    // ─── FIX (manual continue): the clash no longer auto-advances after a
-    // fixed delay — it waits for both players to press "Continue" (handled by
-    // the 'continueClash' branch above). Reset the ack flags for this new
-    // clash, and record whether it ends the match, so the 'continueClash'
-    // handler knows whether to advance the round or finalize the match once
-    // both acks are in. Nothing else here schedules any further state change
-    // — this broadcast is the last thing that happens until a player acts. ──
-    this.state.clashAck = { p1: false, p2: false };
+    // ─── FIX: broadcast the clash result NOW, while this.state.clashResult is
+    // still populated. Previously the only broadcastState() call in this
+    // function ran at the very end, by which point clashResult had already
+    // been reset back to null a few lines below — so clients never actually
+    // received a message with clashResult set, even though the HP mutation
+    // above was already baked into that same final broadcast. That's why it
+    // looked like the clash "resolved" (HP changed, log updated) without the
+    // clash result screen ever appearing: the populated state was computed
+    // but never sent. We now ship this intermediate state immediately. ────
+    await this.saveState();
+    this.broadcastState();
 
     if (this.state.p1.hp <= 0 || this.state.p2.hp <= 0) {
       const p1Won = this.state.p2.hp <= 0;
@@ -366,24 +352,44 @@ export class ReceptionRoom extends DurableObject {
         p1: getRankInfo(p1FinalScore).name,
         p2: getRankInfo(p2FinalScore).name,
       };
-      // Don't broadcastMatchResult() or reset the room yet — that used to run
-      // immediately (or after a fixed delay) and would flip the client to the
-      // victory/defeat screen out from under the clash result screen. Now it
-      // only happens once both players have pressed Continue.
-      this.state.pendingMatchEnd = true;
-    } else {
-      this.state.pendingMatchEnd = false;
+      this.broadcastMatchResult();
+      // ─── FIX: reset the room so it can host a new match instead of staying full forever ──
+      this.state = this.createDefaultState();
+      // Clear any pending alarm from this match — nothing left to advance.
+      await this.ctx.storage.deleteAlarm();
+      await this.saveState();
+      return;
     }
 
-    // ─── FIX: broadcast the clash result NOW, while this.state.clashResult is
-    // still populated, and do not schedule anything else after it. Previously
-    // this function either broadcast a stale (already-cleared) clashResult, or
-    // scheduled a timer-based advance that could race ahead of the clash
-    // screen actually rendering. Now the round genuinely just sits here,
-    // clashResult populated and clashAck both false, until 'continueClash'
-    // messages move it forward. ────────────────────────────────────────────
-    await this.saveState();
-    this.broadcastState();
+    // ─── FIX (the real remaining bug): setTimeout() here doesn't survive DO
+    // hibernation. This room uses the Hibernatable WebSockets API
+    // (ctx.acceptWebSocket), which means Cloudflare is free to evict this
+    // Durable Object from memory between messages — that's the whole point
+    // of hibernation, so idle connections don't keep an isolate pinned in
+    // memory. Per Cloudflare's docs, in-memory timers (setTimeout/setInterval)
+    // do NOT survive that eviction; they're silently dropped, no error, no
+    // trace. If that happens here, advanceToNextRound() simply never runs:
+    // p1SkillIdx/p2SkillIdx stay stuck non-null forever, so the next
+    // selectSkill from either player hits the "already selected" early-return
+    // a few lines up and gets silently ignored — no further clashResult is
+    // ever computed or broadcast again. That's exactly "clashed, but the
+    // result stopped showing." The Alarm API is durably persisted (backed by
+    // storage, not the isolate's memory) and is guaranteed to fire even after
+    // the DO is evicted/hibernated, so we use that instead. ─────────────────
+    const CLASH_RESULT_DISPLAY_MS = 2500;
+    await this.ctx.storage.setAlarm(Date.now() + CLASH_RESULT_DISPLAY_MS);
+  }
+
+  // ─── FIX: alarm() replaces the old setTimeout-based scheduling for
+  // advanceToNextRound(). Durable Object alarms persist in storage and are
+  // redelivered even if the DO was evicted/hibernated in between, unlike
+  // setTimeout. ───────────────────────────────────────────────────────────
+  async alarm() {
+    // Guard in case the room was reset (match ended / forfeit / new match)
+    // between when the alarm was scheduled and when it actually fires —
+    // nothing to advance from in that case.
+    if (this.state.clashResult === null) return;
+    await this.advanceToNextRound().catch(err => console.error('advanceToNextRound failed:', err));
   }
 
   private async advanceToNextRound() {
@@ -392,7 +398,6 @@ export class ReceptionRoom extends DurableObject {
     this.state.turn = this.state.turn === 'p1' ? 'p2' : 'p1';
     this.state.phase = this.state.turn === 'p1' ? 'p1Select' : 'p2Select';
     this.state.clashResult = null;
-    this.state.clashAck = { p1: false, p2: false };
 
     if (this.state.p1.transformationActive) {
       this.state.p1.transformationTurnsLeft -= 1;
@@ -467,6 +472,8 @@ export class ReceptionRoom extends DurableObject {
         this.state.winner = winnerKey;
         this.broadcastMatchResult();
         this.state = this.createDefaultState();
+        // Clear any pending alarm from this match — nothing left to advance.
+        await this.ctx.storage.deleteAlarm();
         await this.saveState();
       } else if (loser?.playerName) {
         // Solo player (still queued) disconnected — just free up their seat.
