@@ -1,13 +1,4 @@
 // ReceptionMode.tsx – 1v1 Duel with WebSocket
-// Added: global chat (visible only during combat/result), custom WebSocket integration, fixed "Find Match" button.
-// FIX (this pass): eliminated the "stuck on Waiting for opponent" soft lock by removing the
-// Array.indexOf(skill) lookup used to compute fullIndex for skill selection. indexOf() returned
-// -1 whenever `skill` wasn't reference-equal to an entry in me.skills (e.g. the identity-derived
-// fallback list, or transformed skill objects), which sent an invalid index (-1) to the server.
-// The server would then fail to resolve the clash and never reset selection state, locking both
-// players on "Skill submitted – waiting for opponent" / "Waiting for opponent" forever — whether
-// or not the Excalibur-style auto-select passive fired. Skills are now tagged with their real
-// index (__idx) at filter time, so fullIndex always points at a real position in me.skills.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
