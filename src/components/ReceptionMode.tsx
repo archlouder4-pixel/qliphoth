@@ -174,6 +174,13 @@ export default function ReceptionMode({
   const [ultBarValue, setUltBarValue] = useState(0);
   const [passiveActivating, setPassiveActivating] = useState(false);
   const [weaponError, setWeaponError] = useState<string | null>(null);
+  // ─── FIX (manual continue): the clash screen no longer clears itself on a
+  // timer — it now waits for this player to press Continue AND for the
+  // server to confirm the opponent has too. hasAckedClash tracks whether
+  // *this* player has already pressed it for the clash currently on screen,
+  // so the button can disable itself and show a "waiting" state instead of
+  // being pressable repeatedly. ───────────────────────────────────────────
+  const [hasAckedClash, setHasAckedClash] = useState(false);
   const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting');
 
   const myPlayerIndexRef = useRef<0 | 1>(0);
@@ -367,10 +374,15 @@ export default function ReceptionMode({
             setIsSubmitting(false);
             setPassiveActivating(false);
             setShowClashResult(true);
+            // ─── FIX (manual continue): this is a brand-new clash result, so
+            // this player hasn't pressed Continue on it yet — reset the flag
+            // even if it was left true from the previous clash. ────────────
+            setHasAckedClash(false);
           }
         } else {
           clashSigRef.current = null;
           setShowClashResult(false);
+          setHasAckedClash(false);
           if (state.p1SkillIdx === null && state.p2SkillIdx === null) {
             setPassiveActivating(false);
             // ─── FIX: if the server had to reset a stuck round (invalid index
@@ -454,10 +466,18 @@ export default function ReceptionMode({
   };
   selectSkillRef.current = selectSkill;
 
+  // ─── FIX (manual continue): this used to just locally hide the clash
+  // screen (setShowClashResult(false)) and reset local flags — the server
+  // was already advancing the round on its own timer regardless of whether
+  // the player had even looked at the result yet. Now this only tells the
+  // server "I'm ready"; the clash screen stays up (showClashResult stays
+  // true, driven by roomState.clashResult) until the server confirms BOTH
+  // players have pressed Continue and sends the next-round/match-result
+  // state. ───────────────────────────────────────────────────────────────
   const handleContinue = () => {
-    setShowClashResult(false);
-    setIsSubmitting(false);
-    setPassiveActivating(false);
+    if (hasAckedClash) return;
+    setHasAckedClash(true);
+    sendAction('continueClash');
   };
 
   const buildPlayerData = () => {
@@ -907,25 +927,20 @@ export default function ReceptionMode({
       );
     }
 
-    // ─── FIX: this used to be an early `return` that fully replaced the whole
-    // screen with a standalone "results" page — HP bars, opponent panel, and
-    // the (grayed-out) skill grid all disappeared while it was showing. That's
-    // not how it used to look: the clash result is supposed to appear as an
-    // overlay ON TOP of the live battle screen (skills dimmed out behind it),
-    // so the board still feels present while you see who won. We now compute
-    // the overlay JSX here and render it inside the normal return below,
-    // layered above everything else with a dimmed backdrop, instead of
-    // replacing the whole page. ────────────────────────────────────────────
-    let clashOverlay: React.ReactNode = null;
     if (showClashResult && roomState.clashResult) {
       const cr = roomState.clashResult;
       const isP1 = myPlayerIndexRef.current === 0;
       const iWon = (isP1 && cr.won) || (!isP1 && !cr.won);
       const winnerName = cr.actorName;
+      // ─── FIX (manual continue): the ack state lives on roomState (server is
+      // the source of truth), so both players can see whether the opponent
+      // has pressed Continue yet, not just their own local click. ──────────
+      const oppKey = isP1 ? 'p2' : 'p1';
+      const opponentAcked = !!roomState.clashAck?.[oppKey];
 
-      clashOverlay = (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-[fadeIn_0.15s_ease-out]">
-          <div className="max-w-md w-full">
+      return (
+        <div className="min-h-screen bg-[#070a14] text-white font-sans p-4 flex items-center justify-center">
+          <div className="max-w-2xl w-full space-y-4">
             <TacticalPanel variant={iWon ? 'success' : 'danger'} glow className="text-center py-8">
               <p className="text-2xl font-bold">
                 {iWon ? '✅ You win the clash!' : `❌ ${winnerName} wins the clash!`}
@@ -946,9 +961,23 @@ export default function ReceptionMode({
                 <p className="text-center text-xs text-yellow-400 mt-1">ULT +{(cr.ultimateGain * 100).toFixed(1)}%</p>
               )}
               <div className="mt-6">
-                <TacticalButton onClick={handleContinue} variant="primary" size="lg" className="w-full">
-                  CONTINUE
+                <TacticalButton onClick={handleContinue} variant="primary" size="lg" className="w-full" disabled={hasAckedClash}>
+                  {hasAckedClash ? '⏳ WAITING FOR OPPONENT…' : 'CONTINUE'}
                 </TacticalButton>
+                {hasAckedClash && (
+                  <p className="text-center text-xs text-[#8b9bb4] mt-2">
+                    {opponentAcked ? 'Opponent is ready — advancing…' : 'Waiting for your opponent to press Continue.'}
+                  </p>
+                )}
+              </div>
+            </TacticalPanel>
+            <TacticalPanel header="TACTICAL LOG">
+              <div className="max-h-32 overflow-y-auto bg-[#0a0e14] p-3 font-mono text-xs space-y-0.5">
+                {log.map((l, i) => (
+                  <p key={i} className="text-[#4a5568] break-words hover:text-[#8b9bb4] transition-colors">
+                    <span className="text-[#00d4ff]/50">[{String(i).padStart(3, '0')}]</span> {l}
+                  </p>
+                ))}
               </div>
             </TacticalPanel>
           </div>
@@ -958,7 +987,6 @@ export default function ReceptionMode({
 
     return (
       <div className="min-h-screen bg-[#070a14] text-white font-sans p-4">
-        {clashOverlay}
         <div className="max-w-4xl mx-auto space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <TacticalPanel
