@@ -54,6 +54,7 @@ export interface Identity {
     atk: number;
     def: number;
     spd: number;
+    sanity: number; // Mental stat. Boosts clash power (win chance). White dmg scales off sanity only, Black off both sanity+atk, Red off atk only, Pale is % dmg (uses clash power but not scaled by either stat directly). Low sanity risks Panic.
   };
   skills: IdentitySkill[];
   passives: IdentityPassive[];
@@ -391,7 +392,7 @@ export const identities: Identity[] = [
     element: 'Pale',
     baseInfusion: 'slash',
     faction: 'LCA: Frontline',
-    baseStats: { hp: 4000, atk: 620, def: 280, spd: 130 },
+    baseStats: { hp: 4000, atk: 620, def: 280, spd: 130, sanity: 280 },
     levelCap: 70,
     description: '"A flawless king is the one who can contain their sword, however, there\'s no king and no sword *to be contained*."',
     portrait: '⚔️',
@@ -451,7 +452,7 @@ export const identities: Identity[] = [
     element: 'Pale',
     baseInfusion: 'slash',
     faction: 'LCA: Vanguard',
-    baseStats: { hp: 3800, atk: 450, def: 300, spd: 110 },
+    baseStats: { hp: 3800, atk: 450, def: 300, spd: 110, sanity: 250 },
     levelCap: 60,
     description: '"A knight who carries the weight of a thousand fallen comrades. Her tears are not of sorrow, but of resolve – each drop a promise to those who fell before her."',
     portrait: '🌹',
@@ -508,7 +509,7 @@ export const identities: Identity[] = [
     element: 'Black',
     baseInfusion: 'slash',
     faction: 'The Dusk Syndicate',
-    baseStats: { hp: 4200, atk: 680, def: 250, spd: 140 },
+    baseStats: { hp: 4200, atk: 680, def: 250, spd: 140, sanity: 320 },
     levelCap: 70,
     description: '"Born from the ashes of a forgotten kingdom, Kaelen wields the power of twilight itself. Every step he takes leaves shadows in his wake, and every strike drains the light from his enemies."',
     portrait: '🌑',
@@ -565,7 +566,7 @@ export const identities: Identity[] = [
     element: 'White',
     baseInfusion: 'blunt',
     faction: 'The Order of the Eternal Flame',
-    baseStats: { hp: 3600, atk: 420, def: 290, spd: 115 },
+    baseStats: { hp: 3600, atk: 420, def: 290, spd: 115, sanity: 380 },
     levelCap: 70,
     description: '"A flame that burns twice as bright, Seraphina gave her soul to the divine light. Now she walks the battlefield as a living beacon, healing her allies with her own life force and smiting darkness with purifying radiance."',
     portrait: '☀️',
@@ -622,7 +623,7 @@ export const identities: Identity[] = [
     element: 'Red',
     baseInfusion: 'pierce',
     faction: 'The Crimson Arena',
-    baseStats: { hp: 3900, atk: 580, def: 220, spd: 155 },
+    baseStats: { hp: 3900, atk: 580, def: 220, spd: 155, sanity: 170 },
     levelCap: 60,
     description: '"Born in the blood-soaked arenas of the underworld, Valerius fights with raw, unbridled fury. Every scar tells a story of survival, and every strike is a declaration of war against those who wronged him."',
     portrait: '🔥',
@@ -679,7 +680,7 @@ export const identities: Identity[] = [
     element: 'Pale',
     baseInfusion: 'blunt',
     faction: 'The Drowned Cathedral',
-    baseStats: { hp: 4800, atk: 380, def: 370, spd: 100 },
+    baseStats: { hp: 4800, atk: 380, def: 370, spd: 100, sanity: 220 },
     levelCap: 70,
     description: '"From the deep abyss where sorrow meets the sea, Morwen rises – a spirit of the drowned, carrying the echoes of a lost civilization. Her tears are saltwater, and her voice commands the crushing waves."',
     portrait: '🌊',
@@ -736,7 +737,7 @@ export const identities: Identity[] = [
     element: 'Red',
     baseInfusion: 'slash',
     faction: 'The Northern Tribes',
-    baseStats: { hp: 5000, atk: 620, def: 340, spd: 105 },
+    baseStats: { hp: 5000, atk: 620, def: 340, spd: 105, sanity: 160 },
     levelCap: 70,
     description: '"A berserker whose fury knows no bounds. With every blow he lands, his rage intensifies until he becomes an unstoppable force of destruction – a living storm of steel and blood."',
     portrait: '🔥',
@@ -793,7 +794,7 @@ export const identities: Identity[] = [
     element: 'Pale',
     baseInfusion: 'slash',
     faction: 'The Knights of the Fallen',
-    baseStats: { hp: 3800, atk: 400, def: 310, spd: 120 },
+    baseStats: { hp: 3800, atk: 400, def: 310, spd: 120, sanity: 260 },
     levelCap: 60,
     description: '"A knight who swore to protect her comrades at all costs. When one falls, her grief turns to cold fury, and she becomes an avenging specter – her sorrow sharpened into a blade that cuts through fate itself."',
     portrait: '💀',
@@ -850,7 +851,7 @@ export const identities: Identity[] = [
     element: 'Pale',
     baseInfusion: 'slash',
     faction: 'The Equilibrium Accord',
-    baseStats: { hp: 4100, atk: 550, def: 280, spd: 125 },
+    baseStats: { hp: 4100, atk: 550, def: 280, spd: 125, sanity: 290 },
     levelCap: 70,
     description: '"A blade that balances light and dark, Theron walks the razor\'s edge between order and chaos. He seeks perfect harmony – and when he finds it, he becomes a force that bends reality itself."',
     portrait: '⚖️',
@@ -907,7 +908,7 @@ export const identities: Identity[] = [
     element: 'Red',
     baseInfusion: 'pierce',
     faction: 'The Scarlet Covenant',
-    baseStats: { hp: 3700, atk: 480, def: 260, spd: 130 },
+    baseStats: { hp: 3700, atk: 480, def: 260, spd: 130, sanity: 200 },
     levelCap: 60,
     description: '"A healer who learned that sometimes the only way to save the flock is to become the wolf. She carries the blood of her fallen patients and wields it as a weapon – when the battlefield turns desperate, she becomes the reckoning."',
     portrait: '🩸',
@@ -964,7 +965,7 @@ export const identities: Identity[] = [
     element: 'Black',
     baseInfusion: 'slash',
     faction: 'The Void Researchers',
-    baseStats: { hp: 3800, atk: 560, def: 230, spd: 160 },
+    baseStats: { hp: 3800, atk: 560, def: 230, spd: 160, sanity: 350 },
     levelCap: 70,
     description: '"A researcher who delved too deep into the void and returned with a fragment of its consciousness. He speaks in whispers and his enemies hear their own dying screams – when the echoes grow loud enough, reality bends to his will."',
     portrait: '👁️',
@@ -1028,14 +1029,17 @@ export function computeBattlePower(
   identity: Identity,
   owned: { level: number; rank: number; skillLevels: [number, number, number, number] },
   weaponAtk: number,
-  egoGiftStats: { atk: number; hp: number; def: number },
-  giftResonanceBonus: { atk: number; hp: number; def: number } = { atk: 0, hp: 0, def: 0 },
-  hypertuneBonus: { atk: number; hp: number; def: number } = { atk: 0, hp: 0, def: 0 }
+  egoGiftStats: { atk: number; hp: number; def: number; sanity?: number },
+  giftResonanceBonus: { atk: number; hp: number; def: number; sanity?: number } = { atk: 0, hp: 0, def: 0, sanity: 0 },
+  hypertuneBonus: { atk: number; hp: number; def: number; sanity?: number } = { atk: 0, hp: 0, def: 0, sanity: 0 }
 ): number {
   const lvlScale = 1 + (owned.level - 1) * 0.03;
   const totalAtk = Math.floor((identity.baseStats.atk + egoGiftStats.atk + giftResonanceBonus.atk + hypertuneBonus.atk) * lvlScale + weaponAtk);
   const totalHp = Math.floor((identity.baseStats.hp + egoGiftStats.hp + giftResonanceBonus.hp + hypertuneBonus.hp) * lvlScale);
   const totalDef = Math.floor((identity.baseStats.def + egoGiftStats.def + giftResonanceBonus.def + hypertuneBonus.def) * lvlScale);
+  const totalSanity = Math.floor(
+    (identity.baseStats.sanity + (egoGiftStats.sanity ?? 0) + (giftResonanceBonus.sanity ?? 0) + (hypertuneBonus.sanity ?? 0)) * lvlScale
+  );
 
   const totalSkillPower = identity.skills
     .filter(s => s.type !== 'class')
@@ -1044,7 +1048,9 @@ export function computeBattlePower(
       return sum + (s.basePower + s.powerGrowth * (sl - 1));
     }, 0);
 
-  const baseBp = Math.floor((totalAtk * 0.4 + totalHp * 0.3 + totalDef * 0.3) * (1 + totalSkillPower / 10));
+  // Sanity feeds clash power (win chance) for every damage type, so it counts toward BP
+  // for all identities, weighted a bit lighter than the three physical stats.
+  const baseBp = Math.floor((totalAtk * 0.35 + totalHp * 0.25 + totalDef * 0.25 + totalSanity * 0.15) * (1 + totalSkillPower / 10));
   const cappedBase = Math.min(baseBp, 7000);
   const rankBonus = owned.rank * 125;
   const bp = Math.min(cappedBase + rankBonus, 8000);
