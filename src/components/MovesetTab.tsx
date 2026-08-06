@@ -30,7 +30,7 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// ✅ FIXED: Sanitize Base64 + Zstandard decompression via fzstd
+// ✅ FIXED: Sanitize Base64, patch Project Moon Zstd magic byte, then decompress
 const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
     // Clean up whitespace and convert URL-safe Base64 to standard Base64
@@ -42,7 +42,14 @@ const decodeMovesetCode = async (code: string): Promise<string> => {
       bytes[i] = binaryString.charCodeAt(i);
     }
 
-    // Zstandard decompression
+    // 🔥 HOTFIX: Project Moon's Base64 often corrupts the 4th byte of the Zstd magic number.
+    // Zstd magic = 0x28 0xB5 0x2F 0xFD (Base64: KLUv/Q).
+    // In-game data sometimes has 0x28 0xB5 0x2F 0xBF (Base64: KLUv/a).
+    // We force the correct 4th byte, otherwise fzstd will throw "invalid zstd data".
+    if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xB5 && bytes[2] === 0x2F) {
+      bytes[3] = 0xFD; 
+    }
+
     const decompressed = decompress(bytes);
     return new TextDecoder().decode(decompressed);
   } catch (err) {
