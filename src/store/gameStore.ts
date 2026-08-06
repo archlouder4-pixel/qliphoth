@@ -1,4 +1,4 @@
-// src/store/gameStore.ts – Full file with 15-slot EGO gifts, resonance, hypertune, resistances
+// src/store/gameStore.ts – Full file with moveset integration (version 27)
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { identities, storyOnlyIdentities, getClassCategories, type Identity, expForLevel } from '../data/identities';
@@ -19,8 +19,36 @@ import { CR_REGIONS, SQUAD_INFO, getCurrentWeek, getWeeklyZones, type CRRegion, 
 import { getFirstTutorialStep, getTabTutorialSteps } from '../data/tutorial';
 import { abnormalities } from '../data/abnormalities';
 
+// ── Moveset data ──────────────────────────────────────────────────────
+// Import from movesets.js (adjust path as needed)
+// This file is CommonJS; we use require.
+const movesetsData = require('../../movesets');
+
+// Define a type for a moveset (enriched with grade/obtainable)
+export interface Moveset {
+  name: string;
+  rank: string; // 'ZAYIN' | 'TETH' | 'HE' | 'WAW' | 'ALEPH' | 'WALKIRKSNACHT'
+  grade?: 'standard' | 'plus' | 'commissioned' | 'esoteric' | 'library' | 'removed';
+  obtainable?: boolean;
+  code: string;
+  video?: string;
+}
+
+// Normalize movesets: add default grade and obtainable if missing
+const movesets: Moveset[] = (movesetsData.data || []).map((m: any) => ({
+  ...m,
+  grade: m.grade || 'standard',
+  obtainable: m.obtainable !== undefined ? m.obtainable : true,
+}));
+
+// Build a map for quick lookup
+const movesetMap = new Map<string, Moveset>();
+for (const m of movesets) {
+  movesetMap.set(m.name, m);
+}
+
 // ── STORE VERSION ──────────────────────────────────────────────────────
-const STORE_VERSION = 26;
+const STORE_VERSION = 27; // Incremented for moveset fields
 
 // ── TAB UNLOCK CONSTANTS ──────────────────────────────────────────────
 export const TAB_UNLOCK_LEVELS = {
@@ -34,6 +62,7 @@ export const TAB_UNLOCK_LEVELS = {
   department: 1,
   exploration: 1,
   duel: 1,
+  movesets: 0, // new tab, unlocked from start
 };
 
 export const TAB_UNLOCK_LABELS = {
@@ -47,6 +76,7 @@ export const TAB_UNLOCK_LABELS = {
   department: { title: 'Department Unlocked!', description: 'Manage your facility.' },
   exploration: { title: 'Exploration Unlocked!', description: 'Discover nodes and claim rewards.' },
   duel: { title: 'Duel Unlocked!', description: 'Challenge opponents in 1v1 combat.' },
+  movesets: { title: 'Moveset Collection Unlocked!', description: 'View and obtain powerful movesets.' },
 };
 
 export type BannerType = 'standard' | 'featured' | 'fate' | 'weapon' | 'rerun' | 'rerun_weapon' | 'rerun_fate';
@@ -399,6 +429,14 @@ export interface GameState {
     streak: number;
     history: { result: 'win' | 'loss'; timestamp: number }[];
   };
+
+  // ── Moveset fields ────────────────────────────────────────────────────
+  ownedMovesets: string[];                     // names of owned movesets
+  movesetTickets: number;                      // generic ticket for random moveset
+  wawMovesetTickets: number;                  // ticket that guarantees WAW rank (or higher)
+  alephMovesetTickets: number;                // ticket that guarantees ALEPH rank
+  walkirksnachtMovesetTickets: number;        // exclusive ticket for Walkirksnacht rank
+  movesetShards: Record<string, number>;       // duplicate shards per moveset (for recycling)
 }
 
 function generateFloatingGuarantee(): number {
@@ -666,12 +704,14 @@ const INITIAL_STATE: GameState = {
     { id: 'daily_story', description: 'Complete a Story Quest', progress: 0, max: 1, claimed: false },
     { id: 'daily_level', description: 'Level up an Identity once', progress: 0, max: 1, claimed: false },
     { id: 'daily_gift', description: 'Equip or change an Ego Gift', progress: 0, max: 1, claimed: false },
+    { id: 'daily_moveset', description: 'Obtain a Moveset', progress: 0, max: 1, claimed: false }, // new daily
   ],
   weeklyTasks: [
     { id: 'weekly_reception_first', description: 'Clear Competitive Reception', progress: 0, max: 1, claimed: false },
     { id: 'weekly_reception_score', description: 'Get 200k Score on Competitive Reception', progress: 0, max: 200000, claimed: false },
     { id: 'weekly_pull_10', description: 'Perform 10 Extractions', progress: 0, max: 10, claimed: false },
     { id: 'weekly_level_5', description: 'Level up Identities 5 times', progress: 0, max: 5, claimed: false },
+    { id: 'weekly_moveset_3', description: 'Obtain 3 Movesets', progress: 0, max: 3, claimed: false }, // new weekly
   ],
   competitiveScore: 0,
   competitivePlayed: false,
@@ -799,6 +839,14 @@ const INITIAL_STATE: GameState = {
     streak: 0,
     history: [],
   },
+
+  // ── Moveset initial state ────────────────────────────────────────────
+  ownedMovesets: [],
+  movesetTickets: 0,
+  wawMovesetTickets: 0,
+  alephMovesetTickets: 0,
+  walkirksnachtMovesetTickets: 0,
+  movesetShards: {},
 };
 
 const useGameStore = create<GameState>()(
@@ -1897,6 +1945,10 @@ const useGameStore = create<GameState>()(
           syncSerumMats: 999,
           lowTierMats: 999,
           lunacy: 9999,
+          movesetTickets: 999,
+          wawMovesetTickets: 99,
+          alephMovesetTickets: 99,
+          walkirksnachtMovesetTickets: 99,
         }));
       },
       adminGiveSSRShards: (amount: number = 20): string | null => {
@@ -1958,7 +2010,11 @@ const useGameStore = create<GameState>()(
         });
         set({ ownedIdentities: newOwned });
       },
-      resetState: () => {},
+      resetState: () => {
+        set(INITIAL_STATE);
+        // We need to reinitialize the store with the initial state but keep the persist middleware.
+        // This is a simple reset; better to reload the page.
+      },
 
       // ── Shard Unlock ────────────────────────────────────────────────────
       unlockIdentityWithShards: (identityId: string) => {
@@ -2509,6 +2565,174 @@ const useGameStore = create<GameState>()(
           history: [...state.duel.history, { result, timestamp: Date.now() }].slice(-50),
         }
       })),
+
+      // ─── MOVESET ACTIONS ──────────────────────────────────────────────────
+
+      /**
+       * Add a moveset to the user's collection. If already owned, convert to shards.
+       */
+      addMoveset: (name: string) => {
+        const state = get();
+        const moveset = movesetMap.get(name);
+        if (!moveset) return; // ignore invalid names
+
+        if (state.ownedMovesets.includes(name)) {
+          // Duplicate: give shards
+          set((s) => ({
+            movesetShards: {
+              ...s.movesetShards,
+              [name]: (s.movesetShards[name] || 0) + 1,
+            },
+          }));
+          // Also update daily/weekly progress? No, they count only new obtains.
+          return;
+        }
+
+        set((s) => ({
+          ownedMovesets: [...s.ownedMovesets, name],
+          dailyTasks: s.dailyTasks.map(t =>
+            t.id === 'daily_moveset' ? { ...t, progress: Math.min(t.max, t.progress + 1) } : t
+          ),
+          weeklyTasks: s.weeklyTasks.map(t =>
+            t.id === 'weekly_moveset_3' ? { ...t, progress: Math.min(t.max, t.progress + 1) } : t
+          ),
+        }));
+        // Award some manager exp for obtaining a moveset
+        get().addManagerExp(25);
+      },
+
+      /**
+       * Remove a moveset from the collection (admin or cleanup).
+       */
+      removeMoveset: (name: string) => {
+        set((s) => ({
+          ownedMovesets: s.ownedMovesets.filter(n => n !== name),
+          movesetShards: (() => {
+            const { [name]: _, ...rest } = s.movesetShards;
+            return rest;
+          })(),
+        }));
+      },
+
+      /**
+       * Check if a moveset is owned.
+       */
+      hasMoveset: (name: string) => get().ownedMovesets.includes(name),
+
+      /**
+       * Pull a random moveset using a ticket.
+       * @param ticketType 'random' | 'waw' | 'aleph' | 'walkirksnacht'
+       * @returns The pulled moveset object, or null if not enough tickets or no pool.
+       */
+      pullMoveset: (ticketType: 'random' | 'waw' | 'aleph' | 'walkirksnacht') => {
+        const state = get();
+        const ticketKeyMap = {
+          random: 'movesetTickets',
+          waw: 'wawMovesetTickets',
+          aleph: 'alephMovesetTickets',
+          walkirksnacht: 'walkirksnachtMovesetTickets',
+        } as const;
+        const ticketKey = ticketKeyMap[ticketType];
+        if (!ticketKey) return null;
+        if (state[ticketKey] < 1) return null;
+
+        // Build pool: obtainable movesets with grade not 'removed'
+        let pool = movesets.filter(m =>
+          m.obtainable !== false &&
+          m.grade !== 'removed'
+        );
+
+        // Filter by rank if specific ticket
+        if (ticketType === 'waw') {
+          pool = pool.filter(m => m.rank === 'WAW' || m.rank === 'WALKIRKSNACHT');
+        } else if (ticketType === 'aleph') {
+          pool = pool.filter(m => m.rank === 'ALEPH');
+        } else if (ticketType === 'walkirksnacht') {
+          pool = pool.filter(m => m.rank === 'WALKIRKSNACHT');
+        }
+
+        if (pool.length === 0) return null;
+
+        // Weighted random: higher rank -> lower weight, so we give ZAYIN more chance.
+        // We'll assign weights inversely proportional to rank index.
+        const rankOrder = ['ZAYIN', 'TETH', 'HE', 'WAW', 'ALEPH', 'WALKIRKSNACHT'];
+        const weights = pool.map(m => {
+          const idx = rankOrder.indexOf(m.rank);
+          // Higher idx = higher rank => lower weight (base weight 10, decrease by 1 each rank, min 1)
+          const weight = Math.max(1, 10 - idx);
+          return weight;
+        });
+        const totalWeight = weights.reduce((a, b) => a + b, 0);
+        let rand = Math.random() * totalWeight;
+        let picked = pool[0];
+        for (let i = 0; i < pool.length; i++) {
+          rand -= weights[i];
+          if (rand <= 0) {
+            picked = pool[i];
+            break;
+          }
+        }
+
+        // Deduct ticket
+        set((s) => ({
+          [ticketKey]: s[ticketKey] - 1,
+        }));
+
+        // Add to collection (handles duplicates via shards)
+        get().addMoveset(picked.name);
+
+        return picked;
+      },
+
+      /**
+       * Recycle moveset shards into currency (e.g., threads or lunacy).
+       * @param name moveset name
+       * @param amount number of shards to recycle
+       * @returns boolean success
+       */
+      recycleMovesetShards: (name: string, amount: number): boolean => {
+        const state = get();
+        const shards = state.movesetShards[name] || 0;
+        if (shards < amount) return false;
+        const newShards = shards - amount;
+        // Reward: each shard gives 3 threads and 5 lunacy (example)
+        const threadReward = amount * 3;
+        const lunacyReward = amount * 5;
+        set((s) => {
+          const newShardMap = { ...s.movesetShards };
+          if (newShards === 0) {
+            delete newShardMap[name];
+          } else {
+            newShardMap[name] = newShards;
+          }
+          return {
+            movesetShards: newShardMap,
+            threads: s.threads + threadReward,
+            lunacy: s.lunacy + lunacyReward,
+          };
+        });
+        return true;
+      },
+
+      /**
+       * Buy a moveset ticket using Lunacy (or other currency).
+       */
+      buyMovesetTicket: (cost: number, type: 'random' | 'waw' | 'aleph' | 'walkirksnacht' = 'random') => {
+        const state = get();
+        if (state.lunacy < cost) return false;
+        const ticketKeyMap = {
+          random: 'movesetTickets',
+          waw: 'wawMovesetTickets',
+          aleph: 'alephMovesetTickets',
+          walkirksnacht: 'walkirksnachtMovesetTickets',
+        } as const;
+        const key = ticketKeyMap[type];
+        set((s) => ({
+          lunacy: s.lunacy - cost,
+          [key]: s[key] + 1,
+        }));
+        return true;
+      },
     }),
     {
       name: 'qliphoth_state',
@@ -2660,6 +2884,26 @@ const useGameStore = create<GameState>()(
           };
         }
 
+        // ─── Moveset migration (version 27) ────────────────────────────
+        if (!newState.ownedMovesets) newState.ownedMovesets = [];
+        if (newState.movesetTickets === undefined) newState.movesetTickets = 0;
+        if (newState.wawMovesetTickets === undefined) newState.wawMovesetTickets = 0;
+        if (newState.alephMovesetTickets === undefined) newState.alephMovesetTickets = 0;
+        if (newState.walkirksnachtMovesetTickets === undefined) newState.walkirksnachtMovesetTickets = 0;
+        if (!newState.movesetShards) newState.movesetShards = {};
+
+        // Ensure daily/weekly tasks include moveset tasks
+        const dailyTasks = newState.dailyTasks || [];
+        if (!dailyTasks.find((t: any) => t.id === 'daily_moveset')) {
+          dailyTasks.push({ id: 'daily_moveset', description: 'Obtain a Moveset', progress: 0, max: 1, claimed: false });
+        }
+        const weeklyTasks = newState.weeklyTasks || [];
+        if (!weeklyTasks.find((t: any) => t.id === 'weekly_moveset_3')) {
+          weeklyTasks.push({ id: 'weekly_moveset_3', description: 'Obtain 3 Movesets', progress: 0, max: 3, claimed: false });
+        }
+        newState.dailyTasks = dailyTasks;
+        newState.weeklyTasks = weeklyTasks;
+
         return newState;
       },
       onRehydrateStorage: () => (state) => {
@@ -2740,6 +2984,14 @@ const useGameStore = create<GameState>()(
             history: [],
           };
         }
+
+        // ─── Ensure moveset fields exist ──────────────────────────────
+        if (!state.ownedMovesets) state.ownedMovesets = [];
+        if (state.movesetTickets === undefined) state.movesetTickets = 0;
+        if (state.wawMovesetTickets === undefined) state.wawMovesetTickets = 0;
+        if (state.alephMovesetTickets === undefined) state.alephMovesetTickets = 0;
+        if (state.walkirksnachtMovesetTickets === undefined) state.walkirksnachtMovesetTickets = 0;
+        if (!state.movesetShards) state.movesetShards = {};
       },
       partialize: (state) => ({
         enkephalin: state.enkephalin,
@@ -2815,6 +3067,13 @@ const useGameStore = create<GameState>()(
         resonance: state.resonance,
         facility: state.facility,
         duel: state.duel,
+        // Moveset fields
+        ownedMovesets: state.ownedMovesets,
+        movesetTickets: state.movesetTickets,
+        wawMovesetTickets: state.wawMovesetTickets,
+        alephMovesetTickets: state.alephMovesetTickets,
+        walkirksnachtMovesetTickets: state.walkirksnachtMovesetTickets,
+        movesetShards: state.movesetShards,
       }),
     }
   )
