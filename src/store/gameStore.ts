@@ -20,7 +20,7 @@ import { getFirstTutorialStep, getTabTutorialSteps } from '../data/tutorial';
 import { abnormalities } from '../data/abnormalities';
 
 // ── STORE VERSION ──────────────────────────────────────────────────────
-const STORE_VERSION = 26; // incremented for 15‑slot migration
+const STORE_VERSION = 26;
 
 // ── TAB UNLOCK CONSTANTS ──────────────────────────────────────────────
 export const TAB_UNLOCK_LEVELS = {
@@ -1501,7 +1501,6 @@ const useGameStore = create<GameState>()(
         if (!gift || state.threads < gift.cost || state.managerLevel < 5) return;
         const newThreads = state.threads - gift.cost;
         const owned = state.ownedGifts.includes(giftId) ? state.ownedGifts : [...state.ownedGifts, giftId];
-        // Automatically equip to the gift's slot if empty
         const slot = gift.slot;
         const newGifts = state.equippedGifts.map(g =>
           g.slot === slot ? { ...g, giftId, level: 1, exp: 0, syncLevel: 0 } : g
@@ -2763,4 +2762,248 @@ const useGameStore = create<GameState>()(
         expSerumXL: state.expSerumXL,
         weaponParts: state.weaponParts,
         syncEnhancementMats: state.syncEnhancementMats,
-        syncSerumMats: state
+        syncSerumMats: state.syncSerumMats,
+        lowTierMats: state.lowTierMats,
+        currentChapter: state.currentChapter,
+        storyAllies: state.storyAllies,
+        storyRoster: state.storyRoster,
+        completedChapters: state.completedChapters,
+        nodeCompletion: state.nodeCompletion,
+        dailyTasks: state.dailyTasks,
+        weeklyTasks: state.weeklyTasks,
+        competitiveScore: state.competitiveScore,
+        competitivePlayed: state.competitivePlayed,
+        crRegion: state.crRegion,
+        crRegionLocked: state.crRegionLocked,
+        crWeek: state.crWeek,
+        crZoneScores: state.crZoneScores,
+        crCompletedZones: state.crCompletedZones,
+        crMerit: state.crMerit,
+        crReputation: state.crReputation,
+        crSquad: state.crSquad,
+        totalEnemyDefeats: state.totalEnemyDefeats,
+        banners: state.banners,
+        team: state.team,
+        leaderIndex: state.leaderIndex,
+        shardInventory: state.shardInventory,
+        ssrInverseMaterial: state.ssrInverseMaterial,
+        srInverseMaterial: state.srInverseMaterial,
+        purchasedShards: state.purchasedShards,
+        seenTutorials: state.seenTutorials,
+        pendingTutorialKey: state.pendingTutorialKey,
+        pendingTutorialSequence: state.pendingTutorialSequence,
+        currentTutorialStep: state.currentTutorialStep,
+        giftResonance: state.giftResonance,
+        giftHypertune: state.giftHypertune,
+        weaponHarmonization: state.weaponHarmonization,
+        lastDailyReset: state.lastDailyReset,
+        lastWeeklyReset: state.lastWeeklyReset,
+        allDailyBonusClaimed: state.allDailyBonusClaimed,
+        allWeeklyBonusClaimed: state.allWeeklyBonusClaimed,
+        specialDebuffActive: state.specialDebuffActive,
+        pullHistory: state.pullHistory,
+        roverAwakened: state.roverAwakened,
+        trialIdentities: state.trialIdentities,
+        temporaryTrialIds: state.temporaryTrialIds,
+        awakeningRewardsGranted: state.awakeningRewardsGranted,
+        currentForcedIdentity: state.currentForcedIdentity,
+        currentUseDawnbreaker: state.currentUseDawnbreaker,
+        currentJoinAllies: state.currentJoinAllies,
+        currentChapterId: state.currentChapterId,
+        pendingChapterRewards: state.pendingChapterRewards,
+        egoManifestEssence: state.egoManifestEssence,
+        resonance: state.resonance,
+        facility: state.facility,
+        duel: state.duel,
+      }),
+    }
+  )
+);
+
+// ─── Helper: pullOne ──────────────────────────────────────────────────
+function pullOne(banner: BannerState, bannerType: BannerType): GachaResult {
+  const isFate = bannerType === 'fate' || bannerType === 'rerun_fate';
+  const isRerun = bannerType === 'rerun' || bannerType === 'rerun_fate';
+  const isWeapon = bannerType === 'weapon' || bannerType === 'rerun_weapon';
+  const isFeatured = bannerType === 'featured';
+  const isStandard = bannerType === 'standard';
+
+  const ssrRate = isWeapon ? 0.05 : isFate ? 0.015 : 0.005;
+  const srRate = isWeapon ? 0.135 : 0.025;
+
+  const pity = banner.pity + 1;
+  let pityCap: number;
+  if (isFate) {
+    pityCap = banner.floatingGuarantee || 80;
+  } else if (isWeapon) {
+    pityCap = 40;
+  } else {
+    pityCap = 60;
+  }
+  const isGuaranteed = pity >= pityCap;
+
+  let rarity: 'SSR' | 'SR' | 'material';
+  if (isGuaranteed) {
+    rarity = 'SSR';
+  } else if (isWeapon) {
+    const roll = Math.random();
+    if (roll < ssrRate) rarity = 'SSR';
+    else if (roll < ssrRate + srRate) rarity = 'SR';
+    else rarity = 'material';
+  } else {
+    if (Math.random() < ssrRate) rarity = 'SSR';
+    else if ((pity % 10 === 0) || Math.random() < srRate) rarity = 'SR';
+    else rarity = 'material';
+  }
+
+  if (rarity === 'SSR') {
+    if (isWeapon) {
+      const target = banner.selectedWeaponId;
+      if (banner.calibrationActive && banner.calibrationTarget === target) {
+        const found = weapons.find(w => w.id === target && w.rarity === 'SSR' && w.inGacha);
+        if (found) {
+          banner.calibrationActive = false;
+          banner.calibrationTarget = null;
+          return { type: 'weapon', rarity: 'SSR', id: found.id, name: found.name };
+        }
+      }
+      const pool = weapons.filter(w => w.rarity === 'SSR' && w.inGacha);
+      let picked: Weapon;
+      if (target && Math.random() < 0.8) {
+        const found = pool.find(w => w.id === target);
+        if (found) {
+          banner.calibrationActive = false;
+          banner.calibrationTarget = null;
+          return { type: 'weapon', rarity: 'SSR', id: found.id, name: found.name };
+        }
+      }
+      const offTargetPool = pool.filter(w => w.id !== target);
+      if (offTargetPool.length === 0) {
+        picked = pool[Math.floor(Math.random() * pool.length)];
+      } else {
+        picked = offTargetPool[Math.floor(Math.random() * offTargetPool.length)];
+      }
+      banner.calibrationActive = true;
+      banner.calibrationTarget = target;
+      return { type: 'weapon', rarity: 'SSR', id: picked.id, name: picked.name };
+    }
+
+    let pickedId: string;
+    if (isFeatured || isFate) {
+      const featuredPool = ['arthur_excalibur'];
+      const validFeatured = featuredPool.filter(id => identities.some(i => i.id === id && i.rarity === 'SSR'));
+      if (validFeatured.length === 0) {
+        const fallbackPool = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
+        pickedId = fallbackPool[Math.floor(Math.random() * fallbackPool.length)].id;
+      } else {
+        pickedId = validFeatured[Math.floor(Math.random() * validFeatured.length)];
+      }
+    } else if (isRerun) {
+      const isRateUp = Math.random() < 0.7;
+      if (isRateUp) {
+        const rerunPool = ['arthur_excalibur'];
+        const validRerun = rerunPool.filter(id => identities.some(i => i.id === id && i.rarity === 'SSR'));
+        if (validRerun.length === 0) {
+          const fallbackPool = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
+          pickedId = fallbackPool[Math.floor(Math.random() * fallbackPool.length)].id;
+        } else {
+          pickedId = validRerun[Math.floor(Math.random() * validRerun.length)];
+        }
+      } else {
+        const offPool = identities.filter(i =>
+          i.rarity === 'SSR' &&
+          i.id !== 'arthur_excalibur' &&
+          !storyOnlyIdentities.has(i.id)
+        );
+        if (offPool.length === 0) {
+          const fallback = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
+          pickedId = fallback[Math.floor(Math.random() * fallback.length)].id;
+        } else {
+          pickedId = offPool[Math.floor(Math.random() * offPool.length)].id;
+        }
+      }
+    } else if (isStandard) {
+      const pool = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
+      if (pool.length === 0) throw new Error('No SSR identities in standard pool');
+      pickedId = pool[Math.floor(Math.random() * pool.length)].id;
+    } else {
+      const pool = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
+      pickedId = pool[Math.floor(Math.random() * pool.length)].id;
+    }
+    const identity = identities.find(i => i.id === pickedId)!;
+    return { type: 'identity', rarity: 'SSR', id: pickedId, name: identity.name, shards: 20 };
+  }
+
+  if (rarity === 'SR') {
+    if (isWeapon) {
+      const target = banner.selectedWeaponId;
+      let srUpId: string | undefined;
+      const targetWeapon = weapons.find(w => w.id === target);
+      if (targetWeapon && targetWeapon.signatureFor) {
+        const fallback = weapons.find(w => w.fallbackFor === targetWeapon.signatureFor && w.inGacha);
+        srUpId = fallback?.id;
+      }
+      const pool = weapons.filter(w => w.rarity === 'SR' && w.inGacha);
+      let picked: Weapon;
+      if (srUpId && Math.random() < 0.8889) {
+        const found = pool.find(w => w.id === srUpId);
+        if (found) picked = found;
+        else picked = pool[Math.floor(Math.random() * pool.length)];
+      } else {
+        const otherPool = srUpId ? pool.filter(w => w.id !== srUpId) : pool;
+        picked = otherPool[Math.floor(Math.random() * otherPool.length)];
+      }
+      return { type: 'weapon', rarity: 'SR', id: picked.id, name: picked.name };
+    } else {
+      if (isStandard) {
+        const target = banner.selectedTargetId;
+        let srPool = identities.filter(i => i.rarity === 'SR' && !storyOnlyIdentities.has(i.id));
+        if (banner.featuredId) {
+          srPool = srPool.filter(i => i.id !== banner.featuredId);
+        }
+        let pickedId: string;
+        if (pity % 10 === 0 && target && srPool.some(i => i.id === target)) {
+          pickedId = target;
+        } else {
+          if (target && Math.random() < 0.5 && srPool.some(i => i.id === target)) {
+            pickedId = target;
+          } else {
+            if (srPool.length === 0) throw new Error('No SR identities in standard pool');
+            pickedId = srPool[Math.floor(Math.random() * srPool.length)].id;
+          }
+        }
+        const identity = identities.find(i => i.id === pickedId)!;
+        return { type: 'identity', rarity: 'SR', id: pickedId, name: identity.name, shards: 8 };
+      } else {
+        let pool = identities.filter(i => i.rarity === 'SR' && !storyOnlyIdentities.has(i.id));
+        if (pool.length === 0) throw new Error('No SR identities in featured pool');
+        const picked = pool[Math.floor(Math.random() * pool.length)];
+        return { type: 'identity', rarity: 'SR', id: picked.id, name: picked.name, shards: 8 };
+      }
+    }
+  }
+
+  // Materials
+  const materialRoll = Math.random();
+  if (materialRoll < 0.1542) {
+    return { type: 'material', rarity: 'material', id: 'expSerum', name: 'EXP Essence x2' };
+  } else if (materialRoll < 0.1542 + 0.1439) {
+    return { type: 'material', rarity: 'material', id: 'weapon_parts', name: 'Forge Alloy x2' };
+  } else if (materialRoll < 0.1542 + 0.1439 + 0.1439) {
+    return { type: 'material', rarity: 'material', id: 'threads', name: 'Sigil Strands x1' };
+  } else if (materialRoll < 0.1542 + 0.1439 + 0.1439 + 0.1042) {
+    return { type: 'material', rarity: 'material', id: 'lowTierMats', name: 'Qliphoth Dust x3' };
+  } else if (materialRoll < 0.1542 + 0.1439 + 0.1439 + 0.1042 + 0.1027) {
+    return { type: 'material', rarity: 'material', id: 'syncEnhancementMats', name: 'Sync Materials x1' };
+  } else {
+    const otherPool = [
+      { id: 'expSerum', name: 'EXP Essence x1' },
+      { id: 'weapon_parts', name: 'Forge Alloy x1' },
+      { id: 'lowTierMats', name: 'Qliphoth Dust x2' },
+    ];
+    const picked = otherPool[Math.floor(Math.random() * otherPool.length)];
+    return { type: 'material', rarity: 'material', id: picked.id, name: picked.name };
+  }
+}
+
+export default useGameStore;
