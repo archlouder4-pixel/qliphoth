@@ -1,4 +1,5 @@
 // src/store/gameStore.ts – Full file with moveset integration + blood lunacy milestone
+// Uses ES import for movesets
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { identities, storyOnlyIdentities, getClassCategories, type Identity, expForLevel } from '../data/identities';
@@ -20,8 +21,8 @@ import { getFirstTutorialStep, getTabTutorialSteps } from '../data/tutorial';
 import { abnormalities } from '../data/abnormalities';
 
 // ── Moveset data ──────────────────────────────────────────────────────
-// Import from movesets.js (adjust path as needed)
-const movesetsData = require('../data/movesets');
+// ES import from movesets.js
+import { data as movesetsData } from '../data/movesets';
 
 // Define a type for a moveset (enriched with grade/obtainable)
 export interface Moveset {
@@ -34,7 +35,7 @@ export interface Moveset {
 }
 
 // Normalize movesets: add default grade and obtainable if missing
-const movesets: Moveset[] = (movesetsData.data || []).map((m: any) => ({
+const movesets: Moveset[] = (movesetsData || []).map((m: any) => ({
   ...m,
   grade: m.grade || 'standard',
   obtainable: m.obtainable !== undefined ? m.obtainable : true,
