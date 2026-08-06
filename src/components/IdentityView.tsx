@@ -7,29 +7,39 @@ import useGameStore, {
   TOTAL_RESONANCE_SLOTS,
   type ResonanceType,
 } from '../store/gameStore';
-import { 
-  identities, 
-  expForLevel, 
-  scaledStats, 
-  leaderSkills, 
-  getClassCategory, 
-  getClassCategories, 
-  classCategoryEffect, 
-  CLASS_CATEGORY_INFO, 
-  CLASS_INFO, 
-  INFUSION_INFO, 
+import {
+  identities,
+  expForLevel,
+  scaledStats,
+  leaderSkills,
+  getClassCategory,
+  getClassCategories,
+  classCategoryEffect,
+  CLASS_CATEGORY_INFO,
+  CLASS_INFO,
+  INFUSION_INFO,
   combatCategories,
-  type Identity, 
-  type CombatCategory 
+  type Identity,
+  type CombatCategory,
 } from '../data/identities';
 import { weapons, compatibleWeapons } from '../data/weapons';
-import { egoGifts, setBonuses, RESONANCE_STATS, HYPERTUNE_LEVELS } from '../data/egoGifts';
+import {
+  egoGifts,
+  setBonuses,
+  RESONANCE_STATS,
+  HYPERTUNE_LEVELS,
+  EGO_GIFT_SLOTS,
+  type EgoGiftSlot,
+} from '../data/egoGifts';
+import { storyChapters } from '../data/story';
+import { CR_REGIONS, SQUAD_INFO, getCurrentWeek, getWeeklyZones, type CRRegion, type Squad, type ZoneElement } from '../data/competitive';
+import { getFirstTutorialStep, getTabTutorialSteps } from '../data/tutorial';
 
 // ─── Rarity Config ─────────────────────────────────────────────────────────
 const RARITY_CONFIG = {
   SSR: { color: '#ffd700', glow: '0 0 20px rgba(255,215,0,0.15)', label: '000' },
-  SR:  { color: '#00cc88', glow: '0 0 20px rgba(0,204,136,0.15)', label: '00' },
-  S:   { color: '#8b8b8b', glow: '0 0 20px rgba(139,139,139,0.15)', label: 'Base' },
+  SR: { color: '#00cc88', glow: '0 0 20px rgba(0,204,136,0.15)', label: '00' },
+  S: { color: '#8b8b8b', glow: '0 0 20px rgba(139,139,139,0.15)', label: 'Base' },
 };
 
 // ─── Damage Type Debuff Definitions ──────────────────────────────────────
@@ -110,7 +120,7 @@ function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }
 }
 
 // ─── Stat Display ──────────────────────────────────────────────────────────
-function StatDisplay({ label, value, color }: { label: string; value: number; color: string }) {
+function StatDisplay({ label, value, color }: { label: string; value: number | string; color: string }) {
   return (
     <div className="flex flex-col items-center p-3 border border-gray-700 bg-gray-800">
       <span className="text-[10px] text-gray-400 font-mono tracking-wider mb-1">{label}</span>
@@ -242,7 +252,9 @@ export default function IdentityView() {
   const resonateGift = store.resonateGift || (() => {});
   const hypertuneGift = store.hypertuneGift || (() => {});
   const harmonizeWeapon = store.harmonizeWeapon || (() => {});
-  const getTotalGiftStats = store.getTotalGiftStats || (() => ({ hp: 0, atk: 0, def: 0, spd: 0 }));
+  const getTotalGiftStats = store.getTotalGiftStats || (() => ({ hp: 0, atk: 0, def: 0, spd: 0, sanity: 0, resistRed: 0, resistPale: 0, resistBlack: 0, resistWhite: 0, clashPower: 0, healBonus: 0 }));
+  const getTotalResistances = store.getTotalResistances || (() => ({ red: 0, pale: 0, black: 0, white: 0 }));
+  const getTotalSetBonuses = store.getTotalSetBonuses || (() => []);
 
   // ── Local state ──────────────────────────────────────────────────────
   const [serumS, setSerumS] = useState(0);
@@ -281,10 +293,10 @@ export default function IdentityView() {
 
   const selectedIdentity = identities.find(i => i.id === selectedId);
   const owned = ownedIdentities.find(o => o.identityId === selectedId);
-  const equippedGiftsForSelected = selectedId ? (identityEquippedGifts[selectedId] || []) : [];
-  const totalResStats = getTotalResonanceStats();
-  const giftStats = selectedId ? getTotalGiftStats(selectedId) : { hp: 0, atk: 0, def: 0, spd: 0 };
-  const hasEquippedGift = equippedGiftsForSelected.some(g => g.giftId);
+  const equippedGifts = store.equippedGifts || []; // 15 slots
+  const giftStats = getTotalGiftStats();
+  const resistances = getTotalResistances();
+  const setBonusesActive = getTotalSetBonuses();
 
   // ── Handlers ──────────────────────────────────────────────────────────
   const getShardCostForNextRank = (identity: Identity, currentRank: number): number | null => {
@@ -299,18 +311,18 @@ export default function IdentityView() {
 
   const calculateSetBonuses = () => {
     const setCounts: Record<string, number> = {};
-    equippedGiftsForSelected.forEach(g => {
+    equippedGifts.forEach(g => {
       if (!g.giftId) return;
       const gift = egoGifts.find(eg => eg.id === g.giftId);
       if (gift?.set) setCounts[gift.set] = (setCounts[gift.set] || 0) + 1;
     });
     return setCounts;
   };
-  const activeSetBonuses = calculateSetBonuses();
+  const activeSetCounts = calculateSetBonuses();
 
   const getActiveSetBonuses = () => {
     const result: { setName: string; pieces: number; description: string; effect: string; isActive: boolean }[] = [];
-    Object.entries(activeSetBonuses).forEach(([setName, count]) => {
+    Object.entries(activeSetCounts).forEach(([setName, count]) => {
       const bonuses = setBonuses[setName];
       if (!bonuses) return;
       let isHarmonizedActive = false;
@@ -344,13 +356,12 @@ export default function IdentityView() {
     }).map(gift => gift.id);
   };
 
-  const upgradeGiftToMax = (slot: number) => {
+  const upgradeGiftToMax = (slotId: EgoGiftSlot) => {
     let safety = 200;
     while (safety-- > 0) {
-      const gifts = identityEquippedGifts[selectedId!] || [];
-      const gift = gifts.find(g => g.slot === slot);
+      const gift = equippedGifts.find(g => g.slot === slotId);
       if (!gift || !gift.giftId || gift.level >= 25 || store.threads < 100) break;
-      levelUpGift(slot, selectedId!);
+      levelUpGift(slotId);
     }
   };
 
@@ -371,18 +382,15 @@ export default function IdentityView() {
       }
     }
     let relicBP = 0;
-    const equippedGifts = identityEquippedGifts[selectedIdentity.id] || [];
-    for (let slot = 1; slot <= 6; slot++) {
-      const entry = equippedGifts.find(g => g.slot === slot);
-      if (entry && entry.giftId) {
-        const level = entry.level || 1;
+    for (const slot of equippedGifts) {
+      if (slot.giftId) {
+        const level = slot.level || 1;
         relicBP += Math.min(25 + (level - 1) * 5, 150);
       }
     }
     let hypertuneBP = 0;
-    const hypertuneData = giftHypertune[selectedIdentity.id] || {};
-    for (let slot = 1; slot <= 6; slot++) {
-      if ((hypertuneData[slot] || 0) > 0) hypertuneBP += 175;
+    for (const slot of equippedGifts) {
+      if (giftHypertune[slot.slot] > 0) hypertuneBP += 175;
     }
     const rankBP = owned.rank * 112.5;
     return Math.round(charBP + weaponBP + relicBP + hypertuneBP + rankBP);
@@ -447,7 +455,6 @@ export default function IdentityView() {
                   <p className="text-xs font-bold text-white truncate">{identity.name}</p>
                   <p className="text-[10px] text-gray-400 truncate">{identity.title}</p>
                   <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                    {/* ─── Show ALL classes with icons ─── */}
                     {identity.classes.map((cls) => {
                       const info = CLASS_INFO[cls];
                       return (
@@ -491,7 +498,6 @@ export default function IdentityView() {
                   <h2 className="text-xl font-bold text-white tracking-tight">{selectedIdentity.name}</h2>
                   <p className="text-xs text-gray-400">{selectedIdentity.title}</p>
                   <div className="flex items-center gap-3 mt-2 flex-wrap">
-                    {/* ─── ALL CLASSES with Icons ─── */}
                     {selectedIdentity.classes.map((classKey) => {
                       const info = CLASS_INFO[classKey];
                       return (
@@ -501,17 +507,11 @@ export default function IdentityView() {
                         </span>
                       );
                     })}
-                    
-                    {/* ─── Arrow to show derived category ─── */}
                     <span className="text-[10px] text-gray-500">→</span>
-                    
-                    {/* ─── Combat Category (derived) ─── */}
                     <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 border border-cyan-500/40 font-bold text-cyan-400">
                       <span className="text-xs">⚔️</span>
                       <span>{getClassCategory(selectedIdentity.id)}</span>
                     </span>
-
-                    {/* ─── Damage Type & Infusion ─── */}
                     <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 border border-gray-600 font-bold text-gray-400">
                       <span className="w-5 h-5 text-center text-xs">💥</span>
                       {primaryDamageType}
@@ -570,60 +570,51 @@ export default function IdentityView() {
                 </div>
               </div>
 
-              {/* Skills Summary – shows ALL non-class skills */}
+              {/* Skills Summary */}
               <div className="border border-gray-800 p-4 bg-gray-900">
                 <SectionHeader title="Skills Summary" />
                 <div className="space-y-2">
-                  {(() => {
-                    const allSkills = selectedIdentity.skills.filter(s => s.type !== 'class');
-                    return allSkills.map((skill, idx) => {
-                      const isEgo = skill.type === 'ego';
-                      const isDefense = skill.type === 'defense';
-                      const isTransformed = skill.name.includes('Resolve') || 
-                                            skill.name.includes('Slay') || 
-                                            skill.name.includes('SHIT') || 
-                                            skill.name.includes('True Execution');
-                      return (
-                        <div 
-                          key={idx} 
-                          className={`flex items-center gap-2 pl-3 py-1 ${
-                            isEgo ? 'border-l-2 border-rose-500' : 
-                            isDefense ? 'border-l-2 border-emerald-500' :
-                            isTransformed ? 'border-l-2 border-amber-500/50' : 
-                            'border-l-2 border-gray-600'
-                          }`}
-                        >
-                          <span className="text-[10px] text-gray-400 font-mono">
-                            {isEgo ? 'EGO' : isDefense ? 'DEF' : isTransformed ? '✦' : `N${idx + 1}`}
-                          </span>
-                          <span className="text-sm text-white">{skill.name}</span>
-                          {skill.damageType && (
-                            <span className="text-[10px] text-gray-400 font-mono">({skill.damageType})</span>
-                          )}
-                          {skill.infusion && (
-                            <span className="text-[10px] text-gray-400 font-mono">[{normalizeInfusion(skill.infusion)}]</span>
-                          )}
-                          {isTransformed && (
-                            <span className="text-[10px] text-amber-400 font-mono">[TRANSFORMED]</span>
-                          )}
-                          {isDefense && (
-                            <span className="text-[10px] text-emerald-400 font-mono">[EVASIVE]</span>
-                          )}
-                        </div>
-                      );
-                    });
-                  })()}
+                  {selectedIdentity.skills.filter(s => s.type !== 'class').map((skill, idx) => {
+                    const isEgo = skill.type === 'ego';
+                    const isDefense = skill.type === 'defense';
+                    const isTransformed = skill.name.includes('Resolve') || skill.name.includes('Slay') || skill.name.includes('SHIT') || skill.name.includes('True Execution');
+                    return (
+                      <div key={idx} className={`flex items-center gap-2 pl-3 py-1 ${isEgo ? 'border-l-2 border-rose-500' : isDefense ? 'border-l-2 border-emerald-500' : isTransformed ? 'border-l-2 border-amber-500/50' : 'border-l-2 border-gray-600'}`}>
+                        <span className="text-[10px] text-gray-400 font-mono">
+                          {isEgo ? 'EGO' : isDefense ? 'DEF' : isTransformed ? '✦' : `N${idx + 1}`}
+                        </span>
+                        <span className="text-sm text-white">{skill.name}</span>
+                        {skill.damageType && <span className="text-[10px] text-gray-400 font-mono">({skill.damageType})</span>}
+                        {skill.infusion && <span className="text-[10px] text-gray-400 font-mono">[{normalizeInfusion(skill.infusion)}]</span>}
+                        {isTransformed && <span className="text-[10px] text-amber-400 font-mono">[TRANSFORMED]</span>}
+                        {isDefense && <span className="text-[10px] text-emerald-400 font-mono">[EVASIVE]</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Base Stats */}
+              {/* Base Stats + Gift Stats + Resistances */}
               <div>
-                <SectionHeader title="Base Stats" />
-                <div className="grid grid-cols-4 gap-4 border border-gray-800 p-4 bg-gray-900">
+                <SectionHeader title="Stats" subtitle="Base + Gifts" />
+                <div className="grid grid-cols-3 gap-4 border border-gray-800 p-4 bg-gray-900">
                   <StatDisplay label="HP" value={stats.hp + giftStats.hp} color="#ff2a2a" />
                   <StatDisplay label="ATK" value={stats.atk + giftStats.atk} color="#ffaa00" />
                   <StatDisplay label="DEF" value={stats.def + giftStats.def} color="#60a5fa" />
                   <StatDisplay label="SPD" value={stats.spd + giftStats.spd} color="#00ff88" />
+                  <StatDisplay label="Sanity" value={stats.sanity + (giftStats.sanity || 0)} color="#a855f7" />
+                  <StatDisplay label="Clash Power" value={giftStats.clashPower || 0} color="#fcd34d" />
+                </div>
+              </div>
+
+              {/* Resistances */}
+              <div className="border border-gray-800 p-4 bg-gray-900">
+                <SectionHeader title="Resistances (from Gifts)" subtitle="Reduces incoming damage of that type" />
+                <div className="grid grid-cols-4 gap-4">
+                  <StatDisplay label="Red" value={`${resistances.red}%`} color="#ef4444" />
+                  <StatDisplay label="Pale" value={`${resistances.pale}%`} color="#d1d5db" />
+                  <StatDisplay label="Black" value={`${resistances.black}%`} color="#4b5563" />
+                  <StatDisplay label="White" value={`${resistances.white}%`} color="#60a5fa" />
                 </div>
               </div>
 
@@ -647,7 +638,6 @@ export default function IdentityView() {
                     <p className="text-xs text-gray-400">{INFUSION_DEBUFFS[normalizeInfusion(selectedIdentity.baseInfusion)]?.name || 'Unknown'}</p>
                     <p className="text-xs text-gray-400">{INFUSION_DEBUFFS[normalizeInfusion(selectedIdentity.baseInfusion)]?.effect || 'None'}</p>
                   </div>
-                  {/* ─── CLASS DEBUFFS – show each class individually ─── */}
                   {selectedIdentity.classes.map((classKey) => {
                     const info = CLASS_INFO[classKey];
                     const category = combatCategories[classKey];
@@ -731,7 +721,7 @@ export default function IdentityView() {
                 </div>
               )}
 
-              {/* Core Passive (info) */}
+              {/* Core Passive */}
               {selectedIdentity.corePassive && (
                 <div className="border-l-4 p-4 border-purple-500 bg-gray-900">
                   <SectionHeader title="Core Passive" />
@@ -850,7 +840,6 @@ export default function IdentityView() {
               <div className="border border-gray-800 p-4 bg-gray-900">
                 <SectionHeader title="Basic Skills" />
                 {(() => {
-                  // Only normal1, normal2, normal3, and ego are upgradable.
                   const upgradableTypes = ['normal1', 'normal2', 'normal3', 'ego'];
                   const upgradableSkills = selectedIdentity.skills.filter(s => upgradableTypes.includes(s.type));
                   return upgradableSkills.map((skill, i) => {
@@ -864,7 +853,7 @@ export default function IdentityView() {
                 })()}
               </div>
 
-              {/* Core Passive Skill (upgradable) */}
+              {/* Core Passive Skill */}
               {selectedIdentity.corePassive && (
                 <div className="border border-purple-500/20 p-4 bg-gray-900">
                   <SectionHeader title="Core Passive" subtitle="Upgradeable" />
@@ -885,7 +874,7 @@ export default function IdentityView() {
                 </div>
               )}
 
-              {/* Defense Skill (upgradable) */}
+              {/* Defense Skill */}
               {(() => {
                 const defenseSkill = selectedIdentity.skills.find(s => s.type === 'defense');
                 if (!defenseSkill) return null;
@@ -969,105 +958,225 @@ export default function IdentityView() {
           {/* ═══ GIFTS TAB ═══ */}
           {activeTab === 'gifts' && (
             <div className="space-y-6 max-w-4xl">
-              {/* Existing Gift Slots */}
+              {/* ─── 15 Gift Slots ─────────────────────────────────────── */}
               <div className="border border-gray-800 p-4 bg-gray-900">
-                <SectionHeader title="Sigil Relics" subtitle="Slots 1-4: Set | Slots 5-6: Buff" />
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-4">
-                  {equippedGiftsForSelected.map(slot => {
-                    const gift = slot.giftId ? egoGifts.find(g => g.id === slot.giftId) : null;
-                    const res = giftResonance[selectedId]?.[slot.slot];
-                    const htLevel = giftHypertune[selectedId]?.[slot.slot] || 0;
-                    const isSetSlot = slot.slot <= 4;
-                    if (!gift) return <div key={slot.slot} className="border-2 border-dashed border-gray-700 p-4 text-center min-h-[180px] flex flex-col items-center justify-center bg-gray-800"><span className="text-xs font-mono text-gray-400">SLOT {slot.slot}</span><p className="text-sm text-gray-500 mt-2">{isSetSlot ? 'Set' : 'Buff'}</p></div>;
-                    const isMaxLevel = slot.level >= 25;
-                    return <div key={slot.slot} className="border-2 border-purple-500/30 p-3 flex flex-col items-center bg-gray-900">
-                      <div className="w-16 h-16 rounded-lg flex items-center justify-center text-4xl mb-2 bg-purple-500/10">{gift.icon || '🔮'}</div>
-                      <p className="text-sm font-bold text-white truncate w-full text-center">{gift.name}</p>
-                      <p className="text-xs text-gray-400 font-mono">Lv.{slot.level}/25</p>
-                      <div className="w-full h-1.5 bg-gray-800 rounded-full mt-1 overflow-hidden"><div className="h-full bg-purple-500 transition-all" style={{ width: `${(slot.level / 25) * 100}%` }} /></div>
-                      <div className="mt-2 flex gap-1 justify-center">
-                        {[1, 2].map(idx => {
-                          const key = idx === 1 ? 'slot1' : 'slot2';
-                          const current = res?.[key];
-                          return current ? <span key={idx} className="text-[10px] px-1.5 py-0.5 font-mono rounded bg-green-500/10 text-green-400">{current}</span> : <select key={idx} onChange={(e) => resonateGift(slot.slot, idx as 1 | 2, e.target.value as any, selectedId)} className="text-[10px] border border-gray-700 rounded px-1 py-0.5 w-12 bg-gray-800 text-white" value="" disabled={eclipseResonanceMaterials < 1}><option value="">—</option><option value="ATK">ATK</option><option value="HP">HP</option><option value="DEF">DEF</option><option value="SPD">SPD</option></select>;
-                        })}
+                <SectionHeader title="Sigil Relics" subtitle="15 slots • Mix and match sets" />
+
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                  {EGO_GIFT_SLOTS.map(slotDef => {
+                    const slot = equippedGifts.find(g => g.slot === slotDef.id);
+                    const gift = slot?.giftId ? egoGifts.find(g => g.id === slot.giftId) : null;
+                    const res = giftResonance[slotDef.id] || { slot1: null, slot2: null };
+                    const htLevel = giftHypertune[slotDef.id] || 0;
+                    const isMaxLevel = slot?.level >= 25;
+                    const isSetSlot = slotDef.type === 'set';
+                    const isBuffSlot = slotDef.type === 'buff';
+
+                    return (
+                      <div key={slotDef.id} className="border p-3 bg-gray-800 flex flex-col items-center min-h-[220px] relative">
+                        {/* Slot Label */}
+                        <div className="text-[10px] text-gray-400 font-mono uppercase tracking-wider mb-1">
+                          {slotDef.name}
+                          {isBuffSlot && <span className="ml-1 text-amber-400">(Buff)</span>}
+                        </div>
+
+                        {gift ? (
+                          <>
+                            <div className="w-12 h-12 rounded-lg flex items-center justify-center text-3xl bg-gray-700/50">
+                              {gift.icon || '🔮'}
+                            </div>
+                            <p className="text-xs font-bold text-white text-center truncate w-full mt-1">{gift.name}</p>
+                            <p className="text-[10px] text-gray-400 font-mono">Lv.{slot!.level}/25</p>
+
+                            {/* Exp Bar */}
+                            <div className="w-full h-1 bg-gray-700 rounded-full mt-1 overflow-hidden">
+                              <div className="h-full bg-purple-500 transition-all" style={{ width: `${(slot!.exp / expForLevel(slot!.level)) * 100}%` }} />
+                            </div>
+
+                            {/* Resonance */}
+                            <div className="flex gap-1 mt-1">
+                              {[1, 2].map(idx => {
+                                const key = idx === 1 ? 'slot1' : 'slot2';
+                                const current = res[key as keyof typeof res];
+                                return current ? (
+                                  <span key={idx} className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 font-mono">{current}</span>
+                                ) : (
+                                  <select
+                                    key={idx}
+                                    onChange={(e) => resonateGift(slotDef.id, idx as 1 | 2, e.target.value as 'ATK' | 'HP' | 'DEF' | 'SPD')}
+                                    className="text-[9px] border border-gray-600 rounded px-1 py-0.5 w-12 bg-gray-800 text-white"
+                                    value=""
+                                    disabled={eclipseResonanceMaterials < 1}
+                                  >
+                                    <option value="">—</option>
+                                    <option value="ATK">ATK</option>
+                                    <option value="HP">HP</option>
+                                    <option value="DEF">DEF</option>
+                                    <option value="SPD">SPD</option>
+                                  </select>
+                                );
+                              })}
+                            </div>
+
+                            {/* Hypertune Level */}
+                            <div className="text-[10px] text-amber-400 font-mono mt-0.5">Sync Lv.{htLevel}/5</div>
+
+                            {/* Actions */}
+                            <div className="mt-2 w-full space-y-1">
+                              <button
+                                onClick={() => levelUpGift(slotDef.id)}
+                                disabled={threads < 100 || isMaxLevel}
+                                className="w-full text-xs py-1 border border-purple-500/30 rounded hover:bg-purple-500 hover:text-white disabled:opacity-30 transition-colors text-purple-400"
+                              >
+                                +EXP (100 Threads)
+                              </button>
+                              <button
+                                onClick={() => upgradeGiftToMax(slotDef.id)}
+                                disabled={threads < 100 || isMaxLevel}
+                                className="w-full text-xs py-1 border border-amber-500/30 rounded hover:bg-amber-500 hover:text-gray-900 disabled:opacity-30 transition-colors text-amber-400"
+                              >
+                                MAX LV
+                              </button>
+                              <button
+                                onClick={() => syncGift(slotDef.id)}
+                                disabled={syncEnhancementMats < 750 || syncSerumMats < 150}
+                                className="w-full text-xs py-1 border border-cyan-500/30 rounded hover:bg-cyan-500 hover:text-gray-900 disabled:opacity-30 transition-colors text-cyan-400"
+                              >
+                                Sync
+                              </button>
+                              {htLevel < 5 && (
+                                <button
+                                  onClick={() => hypertuneGift(slotDef.id)}
+                                  disabled={threads < (HYPERTUNE_LEVELS[htLevel + 1]?.cost || 0)}
+                                  className="w-full text-xs py-1 border border-amber-500/30 rounded hover:bg-amber-400 hover:text-gray-900 disabled:opacity-30 transition-colors text-amber-400"
+                                >
+                                  +Sync ({HYPERTUNE_LEVELS[htLevel + 1]?.cost || 0} Threads)
+                                </button>
+                              )}
+                              <button
+                                onClick={() => equipOwnedGift('', slotDef.id)}
+                                className="w-full text-xs py-1 border border-red-500/30 rounded hover:bg-red-500 hover:text-white transition-colors text-red-400"
+                              >
+                                Unequip
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          // Empty slot
+                          <div className="flex flex-col items-center justify-center flex-1 text-gray-500">
+                            <span className="text-2xl opacity-30">+</span>
+                            <span className="text-[10px]">Empty</span>
+                            <span className="text-[8px] text-gray-600">{isSetSlot ? 'Set Slot' : 'Buff Slot'}</span>
+                          </div>
+                        )}
                       </div>
-                      <div className="mt-1 text-center"><span className="text-[10px] text-amber-400 font-mono">Sync Lv.{htLevel}/5</span></div>
-                      <div className="mt-2 w-full space-y-1.5">
-                        <button onClick={() => levelUpGift(slot.slot, selectedId)} disabled={threads < 100 || isMaxLevel} className="w-full text-xs py-1.5 border border-purple-500/20 rounded hover:bg-purple-500 hover:text-white disabled:opacity-30 transition-colors text-purple-400">+EXP (100 Threads)</button>
-                        <button onClick={() => upgradeGiftToMax(slot.slot)} disabled={threads < 100 || isMaxLevel} className="w-full text-xs py-1.5 border border-amber-500/30 rounded hover:bg-amber-500 hover:text-gray-900 disabled:opacity-30 transition-colors text-amber-400">MAX LV</button>
-                        <button onClick={() => syncGift(slot.slot, selectedId)} disabled={syncEnhancementMats < 750 || syncSerumMats < 150} className="w-full text-xs py-1.5 border border-cyan-500/20 rounded hover:bg-cyan-500 hover:text-gray-900 disabled:opacity-30 transition-colors text-cyan-400">Sync</button>
-                        {htLevel < 5 && <button onClick={() => hypertuneGift(slot.slot, selectedId)} disabled={threads < (HYPERTUNE_LEVELS[htLevel + 1]?.cost || 0)} className="w-full text-xs py-1.5 border border-amber-500/20 rounded hover:bg-amber-400 hover:text-gray-900 disabled:opacity-30 transition-colors text-amber-400">+Sync ({HYPERTUNE_LEVELS[htLevel + 1]?.cost || 0})</button>}
-                      </div>
-                    </div>;
+                    );
                   })}
                 </div>
-                {(() => {
-                  const activeBonuses = getActiveSetBonuses();
-                  if (activeBonuses.length === 0) return null;
-                  return <div className="border border-amber-500/20 p-3 mt-4 bg-amber-500/5">
-                    <p className="text-[10px] font-bold text-amber-400 mb-2 tracking-wider uppercase">Active Set Bonuses</p>
-                    {activeBonuses.map((b, i) => <div key={i} className={`text-xs mb-1 ${b.isActive ? 'text-white' : 'text-gray-400'}`}><span className="font-bold">{b.setName}</span> ({b.pieces}-pc) {b.isActive ? '✓' : '⚠'} <span className="ml-2 text-gray-400">{b.description}</span></div>)}
-                    <p className="text-[10px] text-gray-400 mt-2">⚡ Harmonize SSR signature weapon to activate 4pc bonuses</p>
-                  </div>;
-                })()}
-              </div>
 
-              {/* ─── Resonance System (only if at least one gift equipped) ─── */}
-              {hasEquippedGift && (
-                <div className="border border-gray-800 p-4 bg-gray-900">
-                  <SectionHeader title="Resonance System" subtitle={`E.G.O Manifest Essence: ${egoManifestEssence}`} />
-                  <div className="flex justify-between items-center mb-4">
-                    <div className="text-xs text-gray-400">E.G.O Manifest Essence: <span className="text-[#ff9e00] font-bold">{egoManifestEssence}</span></div>
-                    <div className="text-xs text-gray-400">Total Stats: HP+{totalResStats.hp} ATK+{totalResStats.atk} DEF+{totalResStats.def} SPD+{totalResStats.spd} CRIT+{totalResStats.crit} Clash+{totalResStats.clashPower}</div>
-                  </div>
-                  <p className="text-xs text-[#4a5568] mb-4">Click any slot (empty or occupied) to assign/change resonance type (costs 1 Essence when changing to a different type). Click + on a slot to Hypertune it.</p>
-                  <div className="grid grid-cols-2 gap-6">
-                    <div><h4 className="text-xs font-bold text-[#00d4ff] uppercase tracking-wider mb-3">Upper Resonance</h4><div className="grid grid-cols-3 gap-2">{resonance.slots.slice(0, UPPER_RESONANCE_SLOTS).map((slot, idx) => <ResonanceSlot key={idx} slot={slot} index={idx} onClick={() => handleResonanceSlotClick(idx)} onHypertune={() => handleHypertune(idx)} />)}</div></div>
-                    <div><h4 className="text-xs font-bold text-[#ff9e00] uppercase tracking-wider mb-3">Lower Resonance</h4><div className="grid grid-cols-3 gap-2">{resonance.slots.slice(UPPER_RESONANCE_SLOTS).map((slot, idx) => { const realIdx = idx + UPPER_RESONANCE_SLOTS; return <ResonanceSlot key={realIdx} slot={slot} index={realIdx} onClick={() => handleResonanceSlotClick(realIdx)} onHypertune={() => handleHypertune(realIdx)} />; })}</div></div>
-                  </div>
-                </div>
-              )}
-
-              {/* Owned Gifts */}
-              <div className="border border-gray-800 p-4 bg-gray-900">
-                <button onClick={() => setShowGiftSelect(!showGiftSelect)} className="text-xs font-bold text-white hover:text-cyan-400 tracking-wider mb-3 transition-colors">{showGiftSelect ? '▲ HIDE OWNED RELICS' : '▼ SHOW OWNED RELICS'}</button>
-                {showGiftSelect && <><p className="text-[10px] text-gray-400 mb-2 italic">Showing compatible signature &amp; class‑appropriate buff relics.</p><div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                {/* ─── Active Set Bonuses ────────────────────────────── */}
+                <div className="mt-6 border border-amber-500/20 p-3 bg-amber-500/5">
+                  <p className="text-[10px] font-bold text-amber-400 mb-2 tracking-wider uppercase">Active Set Bonuses</p>
                   {(() => {
-                    const signatureIds = selectedId ? getSignatureGiftIds(selectedId) : [];
-                    const compatibleBuffIds = selectedId ? getCompatibleBuffGiftIds(selectedId) : [];
-                    const filteredOwned = ownedGifts.filter(id => {
-                      const gift = egoGifts.find(g => g.id === id);
-                      if (!gift) return false;
-                      if (signatureIds.includes(id)) return true;
-                      if (!gift.signatureFor) return compatibleBuffIds.includes(id);
-                      return false;
-                    });
-                    if (filteredOwned.length === 0) return <p className="text-xs text-gray-400 col-span-full">No compatible relics owned.</p>;
-                    return filteredOwned.map(id => {
-                      const gift = egoGifts.find(g => g.id === id)!;
-                      const isEquipped = equippedGiftsForSelected.some(s => s.giftId === id);
-                      const isSignature = signatureIds.includes(id);
-                      return <button key={id} onClick={() => equipOwnedGift(id, selectedId)} className="border p-2 text-left transition-all" style={{ borderColor: isEquipped ? 'rgba(168,85,247,0.4)' : 'gray', background: isEquipped ? 'rgba(168,85,247,0.08)' : 'gray-800' }}>
-                        <div className="aspect-square flex items-center justify-center mb-1 bg-gray-800"><span className="text-2xl">{gift.icon || '🔮'}</span></div>
-                        <p className="text-[10px] font-bold text-white truncate">{gift.name}</p>
-                        <p className="text-[8px] text-gray-400 font-mono">Slot {gift.slot}</p>
-                        {isSignature && <p className="text-[8px] text-amber-400 truncate">★ Signature</p>}
-                        {gift.set && <p className="text-[8px] text-gray-400 truncate">{gift.set}</p>}
-                        {isEquipped && <span className="text-[10px] text-purple-400 font-bold">✓ EQUIPPED</span>}
-                      </button>;
-                    });
+                    const activeBonuses = getActiveSetBonuses();
+                    const active = activeBonuses.filter(b => b.isActive);
+                    if (active.length === 0) {
+                      return <p className="text-xs text-gray-400">No set bonuses active. Equip 2+ gifts from the same set.</p>;
+                    }
+                    return active.map((b, i) => (
+                      <div key={i} className="text-xs mb-1 text-white">
+                        <span className="font-bold text-amber-400">{b.setName}</span>
+                        <span className="text-gray-400"> ({b.pieces}-pc)</span>
+                        <span className="text-green-400 ml-2">✓</span>
+                        <span className="ml-2 text-gray-300">{b.description}</span>
+                      </div>
+                    ));
                   })()}
-                </div></>}
+                  <p className="text-[10px] text-gray-400 mt-2">⚡ 4pc & 6pc bonuses require Harmonization (signature weapon).</p>
+                </div>
               </div>
 
-              {/* Material counters */}
+              {/* ─── Owned Gifts Inventory ────────────────────────────── */}
+              <div className="border border-gray-800 p-4 bg-gray-900">
+                <button
+                  onClick={() => setShowGiftSelect(!showGiftSelect)}
+                  className="text-xs font-bold text-white hover:text-cyan-400 tracking-wider mb-3 transition-colors"
+                >
+                  {showGiftSelect ? '▲ HIDE OWNED RELICS' : '▼ SHOW OWNED RELICS'}
+                </button>
+                {showGiftSelect && (
+                  <>
+                    <p className="text-[10px] text-gray-400 mb-2 italic">Click a relic to equip it to an empty slot.</p>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                      {ownedGifts.length === 0 ? (
+                        <p className="text-xs text-gray-400 col-span-full">No relics owned.</p>
+                      ) : (
+                        ownedGifts.map(id => {
+                          const gift = egoGifts.find(g => g.id === id);
+                          if (!gift) return null;
+                          const isEquipped = equippedGifts.some(g => g.giftId === id);
+                          // Check if the gift's slot is empty
+                          const targetSlot = equippedGifts.find(g => g.slot === gift.slot);
+                          const canEquip = !targetSlot?.giftId;
+                          return (
+                            <button
+                              key={id}
+                              onClick={() => {
+                                if (canEquip) equipOwnedGift(id);
+                                else alert(`Slot ${gift.slot} is already occupied!`);
+                              }}
+                              className={`border p-2 text-left transition-all ${isEquipped ? 'border-purple-500/40 bg-purple-500/10' : 'border-gray-700 bg-gray-800 hover:border-cyan-400/40'} ${!canEquip ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              disabled={!canEquip}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl">{gift.icon || '🔮'}</span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[10px] font-bold text-white truncate">{gift.name}</p>
+                                  <p className="text-[8px] text-gray-400 font-mono">{gift.set || 'No Set'}</p>
+                                  <p className="text-[8px] text-gray-500 font-mono">Slot: {gift.slot}</p>
+                                </div>
+                                {isEquipped && <span className="text-[10px] text-purple-400">✓</span>}
+                              </div>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* ─── Material Counters ────────────────────────────────── */}
               <div className="border border-gray-800 p-4 bg-gray-900">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  <div className="flex items-center gap-2"><span className="text-sm">🧵</span><div><p className="text-[10px] text-gray-400 font-mono">Threads</p><p className="text-sm font-bold font-mono text-white">{threads}</p></div></div>
-                  <div className="flex items-center gap-2"><span className="text-sm">✨</span><div><p className="text-[10px] text-gray-400 font-mono">Eclipse Resonance</p><p className="text-sm font-bold font-mono text-white">{eclipseResonanceMaterials}</p></div></div>
-                  <div className="flex items-center gap-2"><span className="text-sm">🔧</span><div><p className="text-[10px] text-gray-400 font-mono">Sync Enhancement</p><p className="text-sm font-bold font-mono text-white">{syncEnhancementMats}</p></div></div>
-                  <div className="flex items-center gap-2"><span className="text-sm">💧</span><div><p className="text-[10px] text-gray-400 font-mono">Sync Serum</p><p className="text-sm font-bold font-mono text-white">{syncSerumMats}</p></div></div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">🧵</span>
+                    <div>
+                      <p className="text-[10px] text-gray-400 font-mono">Threads</p>
+                      <p className="text-sm font-bold font-mono text-white">{threads}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">✨</span>
+                    <div>
+                      <p className="text-[10px] text-gray-400 font-mono">Resonance Mats</p>
+                      <p className="text-sm font-bold font-mono text-white">{eclipseResonanceMaterials}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">🔧</span>
+                    <div>
+                      <p className="text-[10px] text-gray-400 font-mono">Sync Enhancement</p>
+                      <p className="text-sm font-bold font-mono text-white">{syncEnhancementMats}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">💧</span>
+                    <div>
+                      <p className="text-[10px] text-gray-400 font-mono">Sync Serum</p>
+                      <p className="text-sm font-bold font-mono text-white">{syncSerumMats}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
