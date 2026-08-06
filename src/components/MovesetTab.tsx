@@ -1,6 +1,5 @@
 // src/components/MovesetTab.tsx
 import { useState } from 'react';
-// ✅ SWAPPED TO BROWSER-FRIENDLY WASM
 import { decompress } from '@bokuweb/zstd-wasm';
 import useGameStore, { TICKET_COSTS } from '../store/gameStore';
 import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
@@ -31,11 +30,15 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// ✅ FIXED: Uses browser WASM and patches the corrupted Zstd magic byte
 const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
-    // Clean up whitespace and convert URL-safe Base64 to standard Base64
-    const cleanedCode = code.trim().replace(/-/g, '+').replace(/_/g, '/');
+    // 🔥 CRITICAL FIX: Strip ANY character outside the standard Base64 alphabet.
+    // This handles whitespace, URL-safe chars, AND corrupted Greek symbols (µ ± õ)!
+    const cleanedCode = code.replace(/[^A-Za-z0-9+/=]/g, '');
+
+    if (!cleanedCode) {
+      return 'Invalid code format';
+    }
 
     const binaryString = atob(cleanedCode);
     const bytes = new Uint8Array(binaryString.length);
@@ -43,15 +46,12 @@ const decodeMovesetCode = async (code: string): Promise<string> => {
       bytes[i] = binaryString.charCodeAt(i);
     }
 
-    // 🔥 PROJECT MOON HOTFIX: 
-    // Base64 often corrupts the 4th byte of the Zstd magic number.
-    // Zstd magic = 0x28 0xB5 0x2F 0xFD. In-game data sometimes saves it as 0xBF.
-    // The WASM library crashes if we don't fix this.
+    // PROJECT MOON HOTFIX: Patch the corrupted Zstd magic byte
     if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xB5 && bytes[2] === 0x2F) {
       bytes[3] = 0xFD; 
     }
 
-    // Use the WASM browser-friendly decompress
+    // Decompress using the browser-friendly WASM library
     const decompressed = decompress(bytes);
     return new TextDecoder().decode(decompressed);
   } catch (err) {
@@ -97,7 +97,7 @@ export default function MovesetTab() {
   const [showRemoved, setShowRemoved] = useState(false);
 
   // Walkirksnacht event flag
-  const walkirksnachtEventActive = true; // Set to false when event is over
+  const walkirksnachtEventActive = true;
 
   const movesetMap = new Map();
   movesetsData.forEach((m: any) => movesetMap.set(m.name, m));
