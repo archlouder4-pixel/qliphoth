@@ -389,7 +389,7 @@ export default function MovesetTab() {
 
             {selected.video && (
               <div className="mb-4">
-                
+                <a
                   href={selected.video}
                   target="_blank"
                   rel="noopener noreferrer"
