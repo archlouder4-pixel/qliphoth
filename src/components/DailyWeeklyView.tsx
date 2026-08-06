@@ -1,4 +1,4 @@
-// DailyWeeklyView.tsx – Updated with weapon shard crates & 2★/3★ shard mechanics
+// DailyWeeklyView.tsx – Full updated file
 import { useEffect } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -12,6 +12,8 @@ export default function DailyWeeklyView() {
     weeklyTasks,
     claimDailyTask,
     claimWeeklyTask,
+    claimDailyBonus,
+    claimWeeklyBonus,
     addEnkephalin,
     addManagerExp,
     expSerum,
@@ -25,23 +27,24 @@ export default function DailyWeeklyView() {
     weaponShards2Star,
     weaponShards3Star,
     ensureDailyWeeklyReset,
+    movesetTickets,
+    allDailyBonusClaimed,
+    allWeeklyBonusClaimed,
   } = useGameStore();
 
   useEffect(() => {
     ensureDailyWeeklyReset(getCurrentWeek());
   }, []);
 
-  // ─── Daily Activity Tracking ──────────────────────────────────────
   const completedDailyCount = dailyTasks.filter((t) => t.claimed).length;
-  const dailyActivityMax = 3; // Only need 3 daily missions for max reward
+  const dailyActivityMax = 3;
   const dailyActivityPct = Math.min(100, (completedDailyCount / dailyActivityMax) * 100);
   const allDailyClaimed = dailyTasks.every((t) => t.claimed);
-
   const allWeeklyClaimed = weeklyTasks.every((t) => t.claimed);
 
   return (
     <div className="space-y-6">
-      {/* Materials Overview – Added Weapon Shards */}
+      {/* Materials Overview */}
       <div className="rounded border border-pgr-border bg-pgr-card/60 p-6">
         <h2 className="mb-3 text-lg font-mono font-bold text-white">MATERIALS</h2>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -70,7 +73,6 @@ export default function DailyWeeklyView() {
             <p className="text-xs text-pgr-dim">Qliphoth Dust</p>
             <p className="font-mono font-bold text-pgr-dim">{lowTierMats}</p>
           </div>
-          {/* ─── Weapon Shards ─── */}
           <div className="rounded border border-pgr-border bg-pgr-darker/30 p-3 text-center">
             <p className="text-xs text-pgr-dim">2★ Weapon Shards</p>
             <p className="font-mono font-bold text-green-300">{weaponShards2Star || 0}</p>
@@ -78,6 +80,10 @@ export default function DailyWeeklyView() {
           <div className="rounded border border-pgr-border bg-pgr-darker/30 p-3 text-center">
             <p className="text-xs text-pgr-dim">3★ Weapon Shards</p>
             <p className="font-mono font-bold text-amber-300">{weaponShards3Star || 0}</p>
+          </div>
+          <div className="rounded border border-pgr-border bg-pgr-darker/30 p-3 text-center">
+            <p className="text-xs text-pgr-dim">🎫 Moveset Tickets</p>
+            <p className="font-mono font-bold text-cyan-300">{movesetTickets || 0}</p>
           </div>
         </div>
       </div>
@@ -87,11 +93,10 @@ export default function DailyWeeklyView() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-mono font-bold text-white">DAILY TASKS</h2>
           <span className="text-sm text-cyan-400 font-mono">
-            Reward: 2 Weapon Shard Crates (50 shards each)
+            Reward: 2 Weapon Shard Crates (50 shards each) + Bonus: 1 Moveset Ticket
           </span>
         </div>
 
-        {/* Daily Activity Progress – only need 3 missions for max */}
         <div className="mb-4 rounded border border-pgr-border bg-pgr-darker/30 p-3">
           <div className="flex items-center justify-between text-xs">
             <span className="text-pgr-dim">Daily Activity</span>
@@ -101,9 +106,7 @@ export default function DailyWeeklyView() {
           </div>
           <div className="mt-1 h-2 w-full overflow-hidden border border-pgr-border bg-pgr-darker">
             <div
-              className={`h-full transition-all ${
-                dailyActivityPct >= 100 ? 'bg-cyan-400' : 'bg-violet-600'
-              }`}
+              className={`h-full transition-all ${dailyActivityPct >= 100 ? 'bg-cyan-400' : 'bg-violet-600'}`}
               style={{ width: `${dailyActivityPct}%` }}
             />
           </div>
@@ -129,40 +132,42 @@ export default function DailyWeeklyView() {
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <p className="text-sm font-mono font-medium text-white">
-                    {task.id === 'daily_login_bonus'
-                      ? 'Login Bonus'
-                      : task.description}
+                    {task.id === 'daily_login_bonus' ? 'Login Bonus' : task.description}
                   </p>
                   <div className="mt-1 h-1.5 w-full overflow-hidden border border-pgr-border bg-pgr-darker">
                     <div
-                      className={`h-full transition-all ${
-                        task.progress >= task.max ? 'bg-cyan-400' : 'bg-violet-600'
-                      }`}
+                      className={`h-full transition-all ${task.progress >= task.max ? 'bg-cyan-400' : 'bg-violet-600'}`}
                       style={{ width: `${Math.min(100, (task.progress / task.max) * 100)}%` }}
                     />
                   </div>
-                  <p className="mt-1 text-xs text-pgr-dim">
-                    {task.progress}/{task.max}
-                  </p>
-                  <p className="mt-0.5 text-[10px] text-pgr-dim/50">
-                    +30 Manager EXP on claim
-                  </p>
+                  <p className="mt-1 text-xs text-pgr-dim">{task.progress}/{task.max}</p>
+                  <p className="mt-0.5 text-[10px] text-pgr-dim/50">+30 Manager EXP on claim</p>
                 </div>
                 <button
                   onClick={() => claimDailyTask(task.id)}
                   disabled={task.progress < task.max || task.claimed}
                   className="ml-4 rounded border border-amber-400 bg-amber-400/10 px-4 py-2 text-sm font-mono font-medium text-amber-400 hover:bg-amber-400 hover:text-pgr-dark disabled:opacity-40 transition-all"
                 >
-                  {task.claimed ? 'Claimed ✓' : 'Claim Crates'}
+                  {task.claimed ? 'Claimed ✓' : 'Claim'}
                 </button>
               </div>
             </div>
           ))}
         </div>
 
-        {allDailyClaimed && (
+        {allDailyClaimed && !allDailyBonusClaimed && (
+          <div className="mt-4 flex justify-center">
+            <button
+              onClick={() => claimDailyBonus()}
+              className="rounded border border-cyan-400 bg-cyan-400/10 px-6 py-2 text-sm font-mono font-bold text-cyan-400 hover:bg-cyan-400 hover:text-pgr-dark transition-all"
+            >
+              🎫 Claim Daily Bonus (1 Moveset Ticket)
+            </button>
+          </div>
+        )}
+        {allDailyBonusClaimed && (
           <p className="mt-4 text-center text-sm text-green-400 font-mono">
-            All daily missions completed! 🎉
+            ✅ Daily bonus claimed! Come back tomorrow.
           </p>
         )}
       </div>
@@ -172,7 +177,7 @@ export default function DailyWeeklyView() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-mono font-bold text-white">WEEKLY TASKS</h2>
           <span className="text-sm text-cyan-400 font-mono">
-            Reward: 250 Eclipse Energy each (+1000 Eclipse Energy for all)
+            Reward: 250 Eclipse Energy each (+1000 Eclipse Energy for all) + Bonus: 2 Moveset Tickets
           </span>
         </div>
 
@@ -190,14 +195,10 @@ export default function DailyWeeklyView() {
             >
               <div className="flex items-center justify-between">
                 <div className="flex-1">
-                  <p className="text-sm font-mono font-medium text-white">
-                    {task.description}
-                  </p>
+                  <p className="text-sm font-mono font-medium text-white">{task.description}</p>
                   <div className="mt-1 h-1.5 w-full overflow-hidden border border-pgr-border bg-pgr-darker">
                     <div
-                      className={`h-full transition-all ${
-                        task.progress >= task.max ? 'bg-cyan-400' : 'bg-violet-600'
-                      }`}
+                      className={`h-full transition-all ${task.progress >= task.max ? 'bg-cyan-400' : 'bg-violet-600'}`}
                       style={{ width: `${Math.min(100, (task.progress / task.max) * 100)}%` }}
                     />
                   </div>
@@ -206,25 +207,33 @@ export default function DailyWeeklyView() {
                       ? `${task.progress.toLocaleString()}/${task.max.toLocaleString()}`
                       : `${task.progress}/${task.max}`}
                   </p>
-                  <p className="mt-0.5 text-[10px] text-pgr-dim/50">
-                    +200 Manager EXP on claim
-                  </p>
+                  <p className="mt-0.5 text-[10px] text-pgr-dim/50">+200 Manager EXP on claim</p>
                 </div>
                 <button
                   onClick={() => claimWeeklyTask(task.id)}
                   disabled={task.progress < task.max || task.claimed}
                   className="ml-4 rounded border border-amber-400 bg-amber-400/10 px-4 py-2 text-sm font-mono font-medium text-amber-400 hover:bg-amber-400 hover:text-pgr-dark disabled:opacity-40 transition-all"
                 >
-                  {task.claimed ? 'Claimed ✓' : 'Claim 250⚡'}
+                  {task.claimed ? 'Claimed ✓' : 'Claim'}
                 </button>
               </div>
             </div>
           ))}
         </div>
 
-        {allWeeklyClaimed && (
+        {allWeeklyClaimed && !allWeeklyBonusClaimed && (
+          <div className="mt-4 flex justify-center">
+            <button
+              onClick={() => claimWeeklyBonus()}
+              className="rounded border border-cyan-400 bg-cyan-400/10 px-6 py-2 text-sm font-mono font-bold text-cyan-400 hover:bg-cyan-400 hover:text-pgr-dark transition-all"
+            >
+              🎫 Claim Weekly Bonus (2 Moveset Tickets)
+            </button>
+          </div>
+        )}
+        {allWeeklyBonusClaimed && (
           <p className="mt-4 text-center text-sm text-green-400 font-mono">
-            All weekly tasks completed! 🎉 (+1000 Eclipse Energy bonus granted)
+            ✅ Weekly bonus claimed! Come back next week.
           </p>
         )}
       </div>
