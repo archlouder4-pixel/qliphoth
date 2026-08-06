@@ -69,12 +69,14 @@ const decodeMovesetCode = async (code: string): Promise<string> => {
   }
 
   // 4. Decompress using zstd-codec (browser-friendly WASM)
+  // Note: the library exposes `Simple` and `Streaming` classes — there is no
+  // `Decompressor` class. Simple is fine here since these payloads are small.
   try {
     const decompressed = await new Promise<Uint8Array>((resolve, reject) => {
       ZstdCodec.run((zstd: any) => {
         try {
-          const decomp = new zstd.Decompressor();
-          const result = decomp.decompress(bytes);
+          const simple = new zstd.Simple();
+          const result = simple.decompress(bytes);
           resolve(result);
         } catch (err) {
           reject(err);
