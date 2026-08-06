@@ -30,30 +30,46 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
+// Messages returned by decodeMovesetCode when the code can't be decoded.
+// Kept as constants so the UI can reliably detect "this isn't real data"
+// without string-matching on arbitrary error text.
+const CODE_MISSING = 'No code available for this moveset yet.';
+const CODE_CORRUPTED =
+  'This code is currently unavailable — it appears to be incomplete in our data. Check back later!';
+const CODE_INVALID_DATA = "This code is corrupted (invalid data) and can't be decoded.";
+
+const FAILURE_MESSAGES: string[] = [CODE_MISSING, CODE_CORRUPTED, CODE_INVALID_DATA];
+
 const decodeMovesetCode = async (code: string): Promise<string> => {
+  // 1. Strip any garbage characters (Greek symbols, whitespace, URL-safe chars)
+  const cleanedCode = code.replace(/[^A-Za-z0-9+/=]/g, '');
+
+  if (!cleanedCode) {
+    return CODE_MISSING;
+  }
+
+  // 2. Base64 decode
+  let bytes: Uint8Array;
   try {
-    // 1. Strip any garbage characters (Greek symbols, whitespace, URL-safe chars)
-    const cleanedCode = code.replace(/[^A-Za-z0-9+/=]/g, '');
-
-    if (!cleanedCode) {
-      return 'Invalid code format';
-    }
-
-    // 2. Base64 decode
     const binaryString = atob(cleanedCode);
-    const bytes = new Uint8Array(binaryString.length);
+    bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
+  } catch (err) {
+    console.warn('Moveset code failed base64 decode (likely truncated/incomplete source data):', err);
+    return CODE_INVALID_DATA;
+  }
 
-    // 3. 🔥 PROJECT MOON MAGIC BYTE HOTFIX
-    // Zstd magic = 0x28 0xB5 0x2F 0xFD (Base64: KLUv/Q)
-    // In-game data saves it as 0x28 0xB5 0x2F 0xBF (Base64: KLUv/a)
-    if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xB5 && bytes[2] === 0x2F) {
-      bytes[3] = 0xFD; 
-    }
+  // 3. 🔥 PROJECT MOON MAGIC BYTE HOTFIX
+  // Zstd magic = 0x28 0xB5 0x2F 0xFD (Base64: KLUv/Q)
+  // In-game data saves it as 0x28 0xB5 0x2F 0xBF (Base64: KLUv/a)
+  if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xB5 && bytes[2] === 0x2F) {
+    bytes[3] = 0xFD;
+  }
 
-    // 4. Decompress using zstd-codec (browser-friendly WASM)
+  // 4. Decompress using zstd-codec (browser-friendly WASM)
+  try {
     const decompressed = await new Promise<Uint8Array>((resolve, reject) => {
       ZstdCodec.run((zstd: any) => {
         try {
@@ -68,8 +84,12 @@ const decodeMovesetCode = async (code: string): Promise<string> => {
 
     return new TextDecoder().decode(decompressed);
   } catch (err) {
-    console.error('Failed to decode moveset code:', err);
-    return 'Invalid code format';
+    // Known issue: some codes were truncated during data collection (originally
+    // split across multiple Discord messages / posted as attachments, and only
+    // partially captured) and can't be decompressed. Log quietly instead of
+    // spamming the console as an uncaught error.
+    console.warn('Moveset code failed to decompress (likely incomplete source data):', err);
+    return CODE_CORRUPTED;
   }
 };
 
@@ -106,6 +126,7 @@ export default function MovesetTab() {
   const [selectedMoveset, setSelectedMoveset] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
   const [decodedCode, setDecodedCode] = useState<string | null>(null);
+  const [codeError, setCodeError] = useState(false);
   const [loadingCode, setLoadingCode] = useState(false);
   const [showRemoved, setShowRemoved] = useState(false);
 
@@ -157,15 +178,16 @@ export default function MovesetTab() {
     if (showCode && decodedCode) {
       setShowCode(false);
       setDecodedCode(null);
+      setCodeError(false);
       return;
     }
     setLoadingCode(true);
     try {
       const decoded = await decodeMovesetCode(selected.code);
+      const failed = FAILURE_MESSAGES.includes(decoded);
+      setCodeError(failed);
       setDecodedCode(decoded);
       setShowCode(true);
-    } catch {
-      alert('Failed to decode moveset code.');
     } finally {
       setLoadingCode(false);
     }
@@ -175,6 +197,7 @@ export default function MovesetTab() {
     setSelectedMoveset(null);
     setShowCode(false);
     setDecodedCode(null);
+    setCodeError(false);
     setLoadingCode(false);
   };
 
@@ -430,7 +453,7 @@ export default function MovesetTab() {
               >
                 {loadingCode ? 'Decoding...' : showCode ? 'Hide Code' : 'Show Code'}
               </button>
-              {showCode && decodedCode && (
+              {showCode && decodedCode && !codeError && (
                 <button
                   onClick={() => downloadMovesetCode(selected.name, decodedCode)}
                   className="text-sm text-green-400 hover:text-green-300 transition"
@@ -442,18 +465,26 @@ export default function MovesetTab() {
 
             {showCode && decodedCode && (
               <div className="relative">
-                <pre className="rounded border border-pgr-border bg-pgr-darker/50 p-4 text-xs text-pgr-dim whitespace-pre-wrap font-mono max-h-60 overflow-y-auto">
-                  {decodedCode}
-                </pre>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(decodedCode);
-                    alert('Code copied to clipboard!');
-                  }}
-                  className="absolute top-2 right-2 rounded bg-cyan-500/20 px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-500 hover:text-black transition"
+                <pre
+                  className={`rounded border p-4 text-xs whitespace-pre-wrap font-mono max-h-60 overflow-y-auto ${
+                    codeError
+                      ? 'border-amber-500/30 bg-amber-500/5 text-amber-300'
+                      : 'border-pgr-border bg-pgr-darker/50 text-pgr-dim'
+                  }`}
                 >
-                  Copy
-                </button>
+                  {codeError ? `⚠️ ${decodedCode}` : decodedCode}
+                </pre>
+                {!codeError && (
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(decodedCode);
+                      alert('Code copied to clipboard!');
+                    }}
+                    className="absolute top-2 right-2 rounded bg-cyan-500/20 px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-500 hover:text-black transition"
+                  >
+                    Copy
+                  </button>
+                )}
               </div>
             )}
 
