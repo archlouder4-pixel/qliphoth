@@ -1,5 +1,4 @@
-// src/store/gameStore.ts – Full file with moveset integration + blood lunacy milestone
-// Uses ES import for movesets
+// src/store/gameStore.ts – Full file with moveset integration, blood lunacy, and ticket exchange
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { identities, storyOnlyIdentities, getClassCategories, type Identity, expForLevel } from '../data/identities';
@@ -47,8 +46,16 @@ for (const m of movesets) {
   movesetMap.set(m.name, m);
 }
 
+// ── Ticket exchange costs ──────────────────────────────────────────────
+export const TICKET_COSTS = {
+  RANDOM: 250,          // 250 Blood Lunacy for a random ticket
+  WAW: 800,             // 800 for WAW ticket
+  ALEPH: 1500,          // 1500 for ALEPH ticket
+  WALKIRKSNACHT: 3000,  // 3000 for Walkirksnacht ticket (event only)
+};
+
 // ── STORE VERSION ──────────────────────────────────────────────────────
-const STORE_VERSION = 28; // Incremented for blood lunacy
+const STORE_VERSION = 28;
 
 // ── TAB UNLOCK CONSTANTS ──────────────────────────────────────────────
 export const TAB_UNLOCK_LEVELS = {
@@ -2673,11 +2680,15 @@ const useGameStore = create<GameState>()(
         if (!ticketKey) return null;
         if (state[ticketKey] < 1) return null;
 
+        // Filter pool: obtainable movesets with grade not 'removed'
         let pool = movesets.filter(m =>
           m.obtainable !== false &&
           m.grade !== 'removed'
         );
 
+        // For walkirksnacht, we restrict to only that rank. For others, we also include walkirksnacht if the ticket is WAW? 
+        // Actually, the ticket type determines rank: waw pulls WAW + Walkirksnacht? 
+        // But we want WAW ticket to give WAW or higher? We'll keep current logic:
         if (ticketType === 'waw') {
           pool = pool.filter(m => m.rank === 'WAW' || m.rank === 'WALKIRKSNACHT');
         } else if (ticketType === 'aleph') {
@@ -2688,6 +2699,7 @@ const useGameStore = create<GameState>()(
 
         if (pool.length === 0) return null;
 
+        // Weighted random based on rank rarity
         const rankOrder = ['ZAYIN', 'TETH', 'HE', 'WAW', 'ALEPH', 'WALKIRKSNACHT'];
         const weights = pool.map(m => {
           const idx = rankOrder.indexOf(m.rank);
@@ -2705,10 +2717,12 @@ const useGameStore = create<GameState>()(
           }
         }
 
+        // Deduct ticket
         set((s) => ({
           [ticketKey]: s[ticketKey] - 1,
         }));
 
+        // Add to collection (handles duplicates via shards)
         get().addMoveset(picked.name);
 
         return picked;
@@ -2737,38 +2751,54 @@ const useGameStore = create<GameState>()(
         return true;
       },
 
-      buyMovesetTicket: (cost: number, type: 'random' | 'waw' | 'aleph' | 'walkirksnacht' = 'random') => {
+      // ─── Blood Lunacy ticket exchange actions ──────────────────────────
+      buyRandomMovesetTicket: () => {
         const state = get();
-        if (state.lunacy < cost) return false;
-        const ticketKeyMap = {
-          random: 'movesetTickets',
-          waw: 'wawMovesetTickets',
-          aleph: 'alephMovesetTickets',
-          walkirksnacht: 'walkirksnachtMovesetTickets',
-        } as const;
-        const key = ticketKeyMap[type];
+        const cost = TICKET_COSTS.RANDOM;
+        if (state.bloodLunacy < cost) return false;
         set((s) => ({
-          lunacy: s.lunacy - cost,
-          [key]: s[key] + 1,
-        }));
-        return true;
-      },
-
-      // ─── BLOOD LUNACY ACTIONS ──────────────────────────────────────────
-
-      addBloodLunacy: (amount: number) => {
-        set((state) => ({ bloodLunacy: state.bloodLunacy + amount }));
-      },
-
-      claimBloodLunacyTicket: () => {
-        const state = get();
-        if (state.bloodLunacy < state.bloodLunacyThreshold) return false;
-        set((s) => ({
-          bloodLunacy: s.bloodLunacy - s.bloodLunacyThreshold,
+          bloodLunacy: s.bloodLunacy - cost,
           movesetTickets: s.movesetTickets + 1,
         }));
-        get().addManagerExp(100);
         return true;
+      },
+
+      buyWawMovesetTicket: () => {
+        const state = get();
+        const cost = TICKET_COSTS.WAW;
+        if (state.bloodLunacy < cost) return false;
+        set((s) => ({
+          bloodLunacy: s.bloodLunacy - cost,
+          wawMovesetTickets: s.wawMovesetTickets + 1,
+        }));
+        return true;
+      },
+
+      buyAlephMovesetTicket: () => {
+        const state = get();
+        const cost = TICKET_COSTS.ALEPH;
+        if (state.bloodLunacy < cost) return false;
+        set((s) => ({
+          bloodLunacy: s.bloodLunacy - cost,
+          alephMovesetTickets: s.alephMovesetTickets + 1,
+        }));
+        return true;
+      },
+
+      buyWalkirksnachtMovesetTicket: () => {
+        const state = get();
+        const cost = TICKET_COSTS.WALKIRKSNACHT;
+        if (state.bloodLunacy < cost) return false;
+        set((s) => ({
+          bloodLunacy: s.bloodLunacy - cost,
+          walkirksnachtMovesetTickets: s.walkirksnachtMovesetTickets + 1,
+        }));
+        return true;
+      },
+
+      // ── Blood Lunacy additive ──────────────────────────────────────────
+      addBloodLunacy: (amount: number) => {
+        set((state) => ({ bloodLunacy: state.bloodLunacy + amount }));
       },
     }),
     {
