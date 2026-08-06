@@ -5,19 +5,58 @@ import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
 
 const RANK_ORDER = ['ALEPH', 'WAW', 'HE', 'TETH', 'ZAYIN', 'WALKIRKSNACHT'];
 
+const GRADE_COLORS: Record<string, string> = {
+  standard: 'text-gray-400 border-gray-500/30 bg-gray-500/10',
+  plus: 'text-pink-400 border-pink-500/30 bg-pink-500/10',
+  commissioned: 'text-purple-400 border-purple-500/30 bg-purple-500/10',
+  commissioned_unobtainable: 'text-red-400 border-red-500/30 bg-red-500/10',
+  esoteric: 'text-blue-400 border-blue-500/30 bg-blue-500/10',
+  esoteric_removed: 'text-gray-500 border-gray-600/30 bg-gray-600/10 line-through',
+  library: 'text-green-400 border-green-500/30 bg-green-500/10',
+  removed: 'text-red-500 border-red-600/30 bg-red-600/10 line-through',
+};
+
+const GRADE_LABELS: Record<string, string> = {
+  standard: 'Standard',
+  plus: 'Plus+',
+  commissioned: 'Commissioned',
+  commissioned_unobtainable: 'Commissioned (Unobtainable)',
+  esoteric: 'Esoteric',
+  esoteric_removed: 'Esoteric (Removed)',
+  library: 'Library',
+  removed: 'Removed',
+};
+
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-const decodeMovesetCode = (code: string) => {
+// Async decode: base64 + zlib (deflate)
+const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
-    return atob(code);
+    const binaryString = atob(code);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const ds = new DecompressionStream('deflate');
+    const writer = ds.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const reader = ds.readable.getReader();
+    const result = await reader.read();
+    const decoded = new TextDecoder().decode(result.value);
+    return decoded;
   } catch {
-    return 'Invalid code format';
+    try {
+      return atob(code);
+    } catch {
+      return 'Invalid code format';
+    }
   }
 };
 
-const downloadMovesetCode = (name: string, code: string) => {
-  const decoded = decodeMovesetCode(code);
-  const blob = new Blob([decoded], { type: 'text/plain' });
+// Download decoded code as .txt
+const downloadMovesetCode = (name: string, decodedCode: string) => {
+  const blob = new Blob([decodedCode], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -42,18 +81,28 @@ export default function MovesetTab() {
     buyRandomMovesetTicket,
     buyWawMovesetTicket,
     buyAlephMovesetTicket,
+    buyWalkirksnachtMovesetTicket,
   } = useGameStore();
 
   const [selectedMoveset, setSelectedMoveset] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
+  const [decodedCode, setDecodedCode] = useState<string | null>(null);
+  const [loadingCode, setLoadingCode] = useState(false);
+  const [showRemoved, setShowRemoved] = useState(false);
+
+  // Walkirksnacht event flag - you can set this based on your event system
+  const walkirksnachtEventActive = true; // Set to false when event is over
 
   const movesetMap = new Map();
   movesetsData.forEach((m: any) => movesetMap.set(m.name, m));
 
+  // Group owned movesets by rank, filter out removed if not showing them
   const grouped: Record<string, string[]> = {};
   ownedMovesets.forEach(name => {
     const m = movesetMap.get(name);
     if (!m) return;
+    // Skip removed movesets unless showing them
+    if (m.grade === 'removed' && !showRemoved) return;
     const rank = m.rank || 'UNKNOWN';
     if (!grouped[rank]) grouped[rank] = [];
     grouped[rank].push(name);
@@ -77,77 +126,106 @@ export default function MovesetTab() {
     }
   };
 
+  const handleBuyTicket = (buyFn: () => boolean, ticketName: string) => {
+    if (buyFn()) {
+      alert(`✅ You bought a ${ticketName} ticket!`);
+    } else {
+      alert('❌ Not enough Blood Lunacy!');
+    }
+  };
+
   const selected = selectedMoveset ? movesetMap.get(selectedMoveset) : null;
+
+  const handleShowCode = async () => {
+    if (!selected) return;
+    if (showCode && decodedCode) {
+      setShowCode(false);
+      setDecodedCode(null);
+      return;
+    }
+    setLoadingCode(true);
+    try {
+      const decoded = await decodeMovesetCode(selected.code);
+      setDecodedCode(decoded);
+      setShowCode(true);
+    } catch {
+      alert('Failed to decode moveset code.');
+    } finally {
+      setLoadingCode(false);
+    }
+  };
+
+  const handleCloseModal = () => {
+    setSelectedMoveset(null);
+    setShowCode(false);
+    setDecodedCode(null);
+    setLoadingCode(false);
+  };
+
+  // Count movesets by grade for stats
+  const gradeCounts: Record<string, number> = {};
+  ownedMovesets.forEach(name => {
+    const m = movesetMap.get(name);
+    if (!m) return;
+    const grade = m.grade || 'standard';
+    gradeCounts[grade] = (gradeCounts[grade] || 0) + 1;
+  });
+
+  const totalMovesets = ownedMovesets.length;
 
   return (
     <div className="space-y-6">
-      {/* Blood Lunacy Balance & Ticket Exchange Shop */}
+      {/* Blood Lunacy & Ticket Exchange */}
       <div className="rounded border border-pgr-border bg-pgr-card/60 p-4">
         <div className="flex items-center justify-between mb-3">
           <span className="text-sm font-mono font-bold text-white">🩸 Blood Lunacy</span>
           <span className="text-sm font-mono text-red-400">{bloodLunacy}</span>
         </div>
+        <div className="mb-4 h-2 w-full overflow-hidden border border-pgr-border bg-pgr-darker">
+          <div
+            className="h-full bg-red-600 transition-all"
+            style={{ width: `${Math.min(100, (bloodLunacy / 1000) * 100)}%` }}
+          />
+        </div>
 
         <h3 className="text-sm font-mono font-bold text-white mb-3">🛒 Ticket Exchange</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {/* Random Ticket */}
           <button
-            onClick={() => {
-              if (buyRandomMovesetTicket()) {
-                alert('✅ You bought a Random ticket!');
-              } else {
-                alert('❌ Not enough Blood Lunacy!');
-              }
-            }}
-            className="rounded border border-cyan-400/30 bg-cyan-400/5 px-3 py-2 text-sm text-cyan-400 hover:bg-cyan-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => handleBuyTicket(buyRandomMovesetTicket, 'Random')}
             disabled={bloodLunacy < TICKET_COSTS.RANDOM}
+            className="rounded border border-cyan-400/30 bg-cyan-400/5 px-3 py-2 text-sm text-cyan-400 hover:bg-cyan-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40"
           >
             <span>🎫 Random Ticket</span>
             <span className="text-xs font-mono">{TICKET_COSTS.RANDOM} 🩸</span>
           </button>
-
-          {/* WAW Ticket */}
           <button
-            onClick={() => {
-              if (buyWawMovesetTicket()) {
-                alert('✅ You bought a WAW ticket!');
-              } else {
-                alert('❌ Not enough Blood Lunacy!');
-              }
-            }}
-            className="rounded border border-yellow-400/30 bg-yellow-400/5 px-3 py-2 text-sm text-yellow-400 hover:bg-yellow-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => handleBuyTicket(buyWawMovesetTicket, 'WAW')}
             disabled={bloodLunacy < TICKET_COSTS.WAW}
+            className="rounded border border-yellow-400/30 bg-yellow-400/5 px-3 py-2 text-sm text-yellow-400 hover:bg-yellow-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40"
           >
             <span>🎫 WAW Ticket</span>
             <span className="text-xs font-mono">{TICKET_COSTS.WAW} 🩸</span>
           </button>
-
-          {/* ALEPH Ticket */}
           <button
-            onClick={() => {
-              if (buyAlephMovesetTicket()) {
-                alert('✅ You bought an ALEPH ticket!');
-              } else {
-                alert('❌ Not enough Blood Lunacy!');
-              }
-            }}
-            className="rounded border border-red-400/30 bg-red-400/5 px-3 py-2 text-sm text-red-400 hover:bg-red-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => handleBuyTicket(buyAlephMovesetTicket, 'ALEPH')}
             disabled={bloodLunacy < TICKET_COSTS.ALEPH}
+            className="rounded border border-red-400/30 bg-red-400/5 px-3 py-2 text-sm text-red-400 hover:bg-red-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40"
           >
             <span>🎫 ALEPH Ticket</span>
             <span className="text-xs font-mono">{TICKET_COSTS.ALEPH} 🩸</span>
           </button>
-
-          {/* Walkirksnacht Ticket – Event Only */}
-          <div className="rounded border border-purple-400/20 bg-purple-400/5 px-3 py-2 text-sm text-purple-400/50 flex items-center justify-between opacity-60">
+          <button
+            onClick={() => handleBuyTicket(buyWalkirksnachtMovesetTicket, 'Walkirksnacht')}
+            disabled={!walkirksnachtEventActive || bloodLunacy < TICKET_COSTS.WALKIRKSNACHT}
+            className="rounded border border-purple-400/30 bg-purple-400/5 px-3 py-2 text-sm text-purple-400 hover:bg-purple-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40"
+          >
             <span>🎫 Walkirksnacht Ticket</span>
-            <span className="text-xs font-mono flex items-center gap-1">
-              🔒 <span className="text-[10px]">Event Only</span>
-            </span>
-          </div>
+            <span className="text-xs font-mono">{walkirksnachtEventActive ? `${TICKET_COSTS.WALKIRKSNACHT} 🩸` : '🔒 EVENT'}</span>
+          </button>
         </div>
         <p className="mt-3 text-xs text-pgr-dim/50">
           Earn Blood Lunacy from Story, Competitive, Duel, Facility Work, and Ordeals.
+          {!walkirksnachtEventActive && ' Walkirksnacht tickets are only available during Walkirksnacht events.'}
         </p>
       </div>
 
@@ -199,9 +277,26 @@ export default function MovesetTab() {
         </div>
       </div>
 
+      {/* Collection Stats */}
+      <div className="rounded border border-pgr-border bg-pgr-card/60 p-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-mono text-white">📊 Collection: {totalMovesets} movesets</span>
+        <div className="flex flex-wrap gap-2 text-xs">
+          {Object.entries(gradeCounts).map(([grade, count]) => (
+            <span key={grade} className={`px-2 py-0.5 rounded ${GRADE_COLORS[grade] || 'text-gray-400'}`}>
+              {GRADE_LABELS[grade] || grade}: {count}
+            </span>
+          ))}
+          <button
+            onClick={() => setShowRemoved(!showRemoved)}
+            className={`px-2 py-0.5 rounded text-xs transition ${showRemoved ? 'bg-red-500/20 text-red-400' : 'text-pgr-dim hover:text-white'}`}
+          >
+            {showRemoved ? 'Hide Removed' : 'Show Removed'}
+          </button>
+        </div>
+      </div>
+
       {/* Collection */}
       <div className="space-y-4">
-        <h2 className="text-xl font-mono font-bold text-white">📚 Moveset Collection</h2>
         {ownedMovesets.length === 0 ? (
           <p className="text-pgr-dim">No movesets owned. Use tickets or Blood Lunacy to extract!</p>
         ) : (
@@ -217,25 +312,28 @@ export default function MovesetTab() {
                     const m = movesetMap.get(name);
                     const grade = m?.grade || 'standard';
                     const shards = movesetShards[name] || 0;
+                    const isRemoved = grade === 'removed' || grade === 'esoteric_removed';
                     return (
                       <div
                         key={name}
-                        className="flex justify-between items-center bg-pgr-darker/30 p-2 rounded border border-pgr-border/30 hover:border-cyan-400/50 cursor-pointer transition group"
+                        className={`flex justify-between items-center bg-pgr-darker/30 p-2 rounded border border-pgr-border/30 hover:border-cyan-400/50 cursor-pointer transition group ${isRemoved ? 'opacity-60' : ''}`}
                         onClick={() => setSelectedMoveset(name)}
                       >
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-pgr-dim group-hover:text-white transition">{name}</span>
-                          {grade !== 'standard' && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono uppercase">
-                              {grade}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`text-sm truncate ${isRemoved ? 'line-through text-gray-500' : 'text-pgr-dim group-hover:text-white transition'}`}>
+                            {name}
+                          </span>
+                          {grade && grade !== 'standard' && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono uppercase whitespace-nowrap ${GRADE_COLORS[grade] || 'text-gray-400 border-gray-500/30 bg-gray-500/10'}`}>
+                              {GRADE_LABELS[grade] || grade}
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-shrink-0">
                           {shards > 0 && (
                             <span className="text-xs text-amber-400">Shards: {shards}</span>
                           )}
-                          {shards > 0 && (
+                          {shards > 0 && !isRemoved && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -264,10 +362,7 @@ export default function MovesetTab() {
       {selectedMoveset && selected && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
-          onClick={() => {
-            setSelectedMoveset(null);
-            setShowCode(false);
-          }}
+          onClick={handleCloseModal}
         >
           <div
             className="max-w-2xl w-full rounded-lg border border-cyan-500/30 bg-gray-900 p-6 shadow-glow-cyan max-h-[90vh] overflow-y-auto"
@@ -276,20 +371,23 @@ export default function MovesetTab() {
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h2 className="text-xl font-mono font-bold text-white">{selected.name}</h2>
-                <div className="flex items-center gap-2 mt-1">
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
                   <span className="text-sm text-pgr-dim">{getRankEmoji(selected.rank)} {selected.rank}</span>
                   {selected.grade && selected.grade !== 'standard' && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono uppercase">
-                      {selected.grade}
+                    <span className={`text-xs px-2 py-0.5 rounded border font-mono uppercase ${GRADE_COLORS[selected.grade] || 'text-gray-400 border-gray-500/30 bg-gray-500/10'}`}>
+                      {GRADE_LABELS[selected.grade] || selected.grade}
                     </span>
+                  )}
+                  {selected.grade === 'commissioned_unobtainable' && (
+                    <span className="text-xs text-red-400">🔒 Not Obtainable</span>
+                  )}
+                  {(selected.grade === 'removed' || selected.grade === 'esoteric_removed') && (
+                    <span className="text-xs text-red-500">❌ Removed</span>
                   )}
                 </div>
               </div>
               <button
-                onClick={() => {
-                  setSelectedMoveset(null);
-                  setShowCode(false);
-                }}
+                onClick={handleCloseModal}
                 className="text-gray-400 hover:text-white text-xl"
               >
                 ✕
@@ -311,14 +409,15 @@ export default function MovesetTab() {
 
             <div className="mb-3 flex items-center gap-3">
               <button
-                onClick={() => setShowCode(!showCode)}
-                className="text-sm text-cyan-400 hover:text-cyan-300 transition"
+                onClick={handleShowCode}
+                disabled={loadingCode}
+                className="text-sm text-cyan-400 hover:text-cyan-300 transition disabled:opacity-50"
               >
-                {showCode ? 'Hide Code' : 'Show Code'}
+                {loadingCode ? 'Decoding...' : showCode ? 'Hide Code' : 'Show Code'}
               </button>
-              {showCode && (
+              {showCode && decodedCode && (
                 <button
-                  onClick={() => downloadMovesetCode(selected.name, selected.code)}
+                  onClick={() => downloadMovesetCode(selected.name, decodedCode)}
                   className="text-sm text-green-400 hover:text-green-300 transition"
                 >
                   ⬇ Download .txt
@@ -326,14 +425,14 @@ export default function MovesetTab() {
               )}
             </div>
 
-            {showCode && (
+            {showCode && decodedCode && (
               <div className="relative">
                 <pre className="rounded border border-pgr-border bg-pgr-darker/50 p-4 text-xs text-pgr-dim whitespace-pre-wrap font-mono max-h-60 overflow-y-auto">
-                  {decodeMovesetCode(selected.code)}
+                  {decodedCode}
                 </pre>
                 <button
                   onClick={() => {
-                    navigator.clipboard.writeText(decodeMovesetCode(selected.code));
+                    navigator.clipboard.writeText(decodedCode);
                     alert('Code copied to clipboard!');
                   }}
                   className="absolute top-2 right-2 rounded bg-cyan-500/20 px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-500 hover:text-black transition"
