@@ -1,19 +1,31 @@
 // src/components/MovesetTab.tsx
 import { useState } from 'react';
-import useGameStore from '../store/gameStore';
+import useGameStore, { TICKET_COSTS } from '../store/gameStore';
 import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
 
 const RANK_ORDER = ['ALEPH', 'WAW', 'HE', 'TETH', 'ZAYIN', 'WALKIRKSNACHT'];
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// Helper to decode base64 moveset code
 const decodeMovesetCode = (code: string) => {
   try {
     return atob(code);
   } catch {
     return 'Invalid code format';
   }
+};
+
+const downloadMovesetCode = (name: string, code: string) => {
+  const decoded = decodeMovesetCode(code);
+  const blob = new Blob([decoded], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 };
 
 export default function MovesetTab() {
@@ -25,10 +37,11 @@ export default function MovesetTab() {
     walkirksnachtMovesetTickets,
     movesetShards,
     bloodLunacy,
-    bloodLunacyThreshold,
     pullMoveset,
     recycleMovesetShards,
-    claimBloodLunacyTicket,
+    buyRandomMovesetTicket,
+    buyWawMovesetTicket,
+    buyAlephMovesetTicket,
   } = useGameStore();
 
   const [selectedMoveset, setSelectedMoveset] = useState<string | null>(null);
@@ -64,46 +77,81 @@ export default function MovesetTab() {
     }
   };
 
-  const handleClaimBloodLunacy = () => {
-    const success = claimBloodLunacyTicket();
-    if (success) {
-      alert('🎫 Claimed a Moveset Ticket from Blood Lunacy!');
-    } else {
-      alert('❌ Not enough Blood Lunacy.');
-    }
-  };
-
-  const bloodProgress = Math.min(100, (bloodLunacy / bloodLunacyThreshold) * 100);
-  const canClaimBlood = bloodLunacy >= bloodLunacyThreshold;
-
   const selected = selectedMoveset ? movesetMap.get(selectedMoveset) : null;
 
   return (
     <div className="space-y-6">
-      {/* Blood Lunacy Milestone */}
+      {/* Blood Lunacy Balance & Ticket Exchange Shop */}
       <div className="rounded border border-pgr-border bg-pgr-card/60 p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-3">
           <span className="text-sm font-mono font-bold text-white">🩸 Blood Lunacy</span>
-          <span className="text-xs text-pgr-dim">{bloodLunacy} / {bloodLunacyThreshold}</span>
+          <span className="text-sm font-mono text-red-400">{bloodLunacy}</span>
         </div>
-        <div className="mt-2 h-2 w-full overflow-hidden border border-pgr-border bg-pgr-darker">
-          <div className={`h-full transition-all ${bloodProgress >= 100 ? 'bg-red-500' : 'bg-red-700'}`} style={{ width: `${bloodProgress}%` }} />
-        </div>
-        {canClaimBlood ? (
+
+        <h3 className="text-sm font-mono font-bold text-white mb-3">🛒 Ticket Exchange</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Random Ticket */}
           <button
-            onClick={handleClaimBloodLunacy}
-            className="mt-3 w-full rounded border border-red-400 bg-red-400/10 px-4 py-2 text-sm font-mono font-bold text-red-400 hover:bg-red-400 hover:text-pgr-dark transition"
+            onClick={() => {
+              if (buyRandomMovesetTicket()) {
+                alert('✅ You bought a Random ticket!');
+              } else {
+                alert('❌ Not enough Blood Lunacy!');
+              }
+            }}
+            className="rounded border border-cyan-400/30 bg-cyan-400/5 px-3 py-2 text-sm text-cyan-400 hover:bg-cyan-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={bloodLunacy < TICKET_COSTS.RANDOM}
           >
-            🎫 Claim Moveset Ticket
+            <span>🎫 Random Ticket</span>
+            <span className="text-xs font-mono">{TICKET_COSTS.RANDOM} 🩸</span>
           </button>
-        ) : (
-          <p className="mt-2 text-xs text-pgr-dim/50">
-            Earn Blood Lunacy from Story and Gamemodes to claim tickets.
-          </p>
-        )}
+
+          {/* WAW Ticket */}
+          <button
+            onClick={() => {
+              if (buyWawMovesetTicket()) {
+                alert('✅ You bought a WAW ticket!');
+              } else {
+                alert('❌ Not enough Blood Lunacy!');
+              }
+            }}
+            className="rounded border border-yellow-400/30 bg-yellow-400/5 px-3 py-2 text-sm text-yellow-400 hover:bg-yellow-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={bloodLunacy < TICKET_COSTS.WAW}
+          >
+            <span>🎫 WAW Ticket</span>
+            <span className="text-xs font-mono">{TICKET_COSTS.WAW} 🩸</span>
+          </button>
+
+          {/* ALEPH Ticket */}
+          <button
+            onClick={() => {
+              if (buyAlephMovesetTicket()) {
+                alert('✅ You bought an ALEPH ticket!');
+              } else {
+                alert('❌ Not enough Blood Lunacy!');
+              }
+            }}
+            className="rounded border border-red-400/30 bg-red-400/5 px-3 py-2 text-sm text-red-400 hover:bg-red-400 hover:text-pgr-dark transition flex items-center justify-between disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={bloodLunacy < TICKET_COSTS.ALEPH}
+          >
+            <span>🎫 ALEPH Ticket</span>
+            <span className="text-xs font-mono">{TICKET_COSTS.ALEPH} 🩸</span>
+          </button>
+
+          {/* Walkirksnacht Ticket – Event Only */}
+          <div className="rounded border border-purple-400/20 bg-purple-400/5 px-3 py-2 text-sm text-purple-400/50 flex items-center justify-between opacity-60">
+            <span>🎫 Walkirksnacht Ticket</span>
+            <span className="text-xs font-mono flex items-center gap-1">
+              🔒 <span className="text-[10px]">Event Only</span>
+            </span>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-pgr-dim/50">
+          Earn Blood Lunacy from Story, Competitive, Duel, Facility Work, and Ordeals.
+        </p>
       </div>
 
-      {/* Ticket Counts */}
+      {/* Ticket Counts & Pull Buttons */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded border border-pgr-border bg-pgr-darker/30 p-3 text-center">
           <p className="text-xs text-pgr-dim">🎫 Random Ticket</p>
@@ -261,13 +309,21 @@ export default function MovesetTab() {
               </div>
             )}
 
-            <div className="mb-3">
+            <div className="mb-3 flex items-center gap-3">
               <button
                 onClick={() => setShowCode(!showCode)}
                 className="text-sm text-cyan-400 hover:text-cyan-300 transition"
               >
                 {showCode ? 'Hide Code' : 'Show Code'}
               </button>
+              {showCode && (
+                <button
+                  onClick={() => downloadMovesetCode(selected.name, selected.code)}
+                  className="text-sm text-green-400 hover:text-green-300 transition"
+                >
+                  ⬇ Download .txt
+                </button>
+              )}
             </div>
 
             {showCode && (
