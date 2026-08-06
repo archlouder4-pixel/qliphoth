@@ -1,19 +1,26 @@
-// src/store/gameStore.ts – Full file with duel score 0, auto-equip, core passive, defense
-// FIX: deployAbnormality now uses actual abnormality data and correct deploy cost.
+// src/store/gameStore.ts – Full file with 15-slot EGO gifts, resonance, hypertune, resistances
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { identities, storyOnlyIdentities, getClassCategories, type Identity } from '../data/identities';
+import { identities, storyOnlyIdentities, getClassCategories, type Identity, expForLevel } from '../data/identities';
 import { weapons, canEquipWeapon, type Weapon } from '../data/weapons';
-import { egoGifts, setBonuses, RESONANCE_STATS, HYPERTUNE_LEVELS, type EgoGift } from '../data/egoGifts';
+import {
+  egoGifts,
+  setBonuses,
+  RESONANCE_STATS,
+  HYPERTUNE_LEVELS,
+  EGO_GIFT_SLOTS,
+  convertLegacyStats,
+  getSetCounts,
+  type EgoGiftSlot,
+  type EgoGift,
+} from '../data/egoGifts';
 import { storyChapters } from '../data/story';
 import { CR_REGIONS, SQUAD_INFO, getCurrentWeek, getWeeklyZones, type CRRegion, type Squad, type ZoneElement } from '../data/competitive';
-import { expForLevel } from '../data/identities';
 import { getFirstTutorialStep, getTabTutorialSteps } from '../data/tutorial';
-// ─── ADDED: import abnormalities for deployAbnormality ───
 import { abnormalities } from '../data/abnormalities';
 
 // ── STORE VERSION ──────────────────────────────────────────────────────
-const STORE_VERSION = 25;
+const STORE_VERSION = 26; // incremented for 15‑slot migration
 
 // ── TAB UNLOCK CONSTANTS ──────────────────────────────────────────────
 export const TAB_UNLOCK_LEVELS = {
@@ -79,7 +86,7 @@ export interface OwnedWeapon {
 }
 
 export interface EquippedGift {
-  slot: number;
+  slot: EgoGiftSlot;          // string slot ID (e.g. 'left_back')
   giftId: string;
   level: number;
   exp: number;
@@ -239,7 +246,7 @@ export interface GameState {
   ownedIdentities: OwnedIdentity[];
   ownedWeapons: OwnedWeapon[];
   ownedGifts: string[];
-  equippedGifts: EquippedGift[];
+  equippedGifts: EquippedGift[]; // 15 slots
 
   expSerum: number;
   expSerumM: number;
@@ -286,8 +293,8 @@ export interface GameState {
   currentTutorialStep: string | null;
   pendingTutorialSequence: string | null;
 
-  giftResonance: Record<number, { slot1: string | null; slot2: string | null }>;
-  giftHypertune: Record<number, number>;
+  giftResonance: Record<EgoGiftSlot, { slot1: string | null; slot2: string | null }>;
+  giftHypertune: Record<EgoGiftSlot, number>;
   weaponHarmonization: Record<string, string>;
 
   lastDailyReset: number;
@@ -607,6 +614,7 @@ function getDeployCost(day: number, risk: string): number {
   return 0;
 }
 
+// ─── INITIAL STATE ──────────────────────────────────────────────────────
 const INITIAL_STATE: GameState = {
   enkephalin: 175,
   weaponFragments: 175,
@@ -631,12 +639,10 @@ const INITIAL_STATE: GameState = {
       equippedWeaponId: 'excalibur_greatsword',
     },
   ],
-  ownedWeapons: [
-    { weaponId: 'excalibur_greatsword', level: 1, exp: 0 },
-  ],
+  ownedWeapons: [{ weaponId: 'excalibur_greatsword', level: 1, exp: 0 }],
   ownedGifts: [],
-  equippedGifts: Array.from({ length: 6 }, (_, i) => ({
-    slot: i + 1,
+  equippedGifts: EGO_GIFT_SLOTS.map(slot => ({
+    slot: slot.id,
     giftId: '',
     level: 1,
     exp: 0,
@@ -728,8 +734,8 @@ const INITIAL_STATE: GameState = {
   pendingTutorialKey: null,
   currentTutorialStep: null,
   pendingTutorialSequence: null,
-  giftResonance: {},
-  giftHypertune: {},
+  giftResonance: {} as Record<EgoGiftSlot, { slot1: string | null; slot2: string | null }>,
+  giftHypertune: {} as Record<EgoGiftSlot, number>,
   weaponHarmonization: {},
   lastDailyReset: Date.now(),
   lastWeeklyReset: Date.now(),
@@ -863,12 +869,7 @@ const useGameStore = create<GameState>()(
             }
           }
           if (finalTeam.length > 3) finalTeam = finalTeam.slice(0, 3);
-          return {
-            ...s,
-            trialIdentities: newTrials,
-            temporaryTrialIds: newTemp,
-            team: finalTeam,
-          };
+          return { ...s, trialIdentities: newTrials, temporaryTrialIds: newTemp, team: finalTeam };
         });
       },
 
@@ -1203,7 +1204,6 @@ const useGameStore = create<GameState>()(
               }));
             }
           } else if (result.type === 'weapon' && result.id) {
-            // Since there's only Excalibur (not in gacha), this branch won't hit.
             set((s) => ({ weaponParts: s.weaponParts + 5 }));
           } else if (result.type === 'material') {
             if (result.id === 'lowTierMats') {
@@ -1396,7 +1396,6 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ─── Core Passive Level Up ─────────────────────────────────────────
       levelUpCorePassive: (identityId: string) => {
         const state = get();
         const owned = state.ownedIdentities.find(o => o.identityId === identityId);
@@ -1415,7 +1414,6 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ─── Defense Level Up ──────────────────────────────────────────────
       levelUpDefense: (identityId: string) => {
         const state = get();
         const owned = state.ownedIdentities.find(o => o.identityId === identityId);
@@ -1459,10 +1457,10 @@ const useGameStore = create<GameState>()(
         }
       },
 
-      // ── EGO Gifts ──────────────────────────────────────────────────────
-      levelUpGift: (slot: number) => {
+      // ─── EGO Gifts (15-slot) ──────────────────────────────────────────
+      levelUpGift: (slotId: EgoGiftSlot) => {
         const state = get();
-        const gift = state.equippedGifts.find(g => g.slot === slot);
+        const gift = state.equippedGifts.find(g => g.slot === slotId);
         if (!gift || !gift.giftId || gift.level >= 25 || state.threads < 100) return;
         const needed = expForLevel(gift.level);
         const exp = gift.exp + 100;
@@ -1470,29 +1468,29 @@ const useGameStore = create<GameState>()(
           set((s) => ({
             threads: s.threads - 100,
             equippedGifts: s.equippedGifts.map(g =>
-              g.slot === slot ? { ...g, level: g.level + 1, exp: exp - needed } : g
+              g.slot === slotId ? { ...g, level: g.level + 1, exp: exp - needed } : g
             ),
           }));
         } else {
           set((s) => ({
             threads: s.threads - 100,
             equippedGifts: s.equippedGifts.map(g =>
-              g.slot === slot ? { ...g, exp } : g
+              g.slot === slotId ? { ...g, exp } : g
             ),
           }));
         }
       },
 
-      syncGift: (slot: number) => {
+      syncGift: (slotId: EgoGiftSlot) => {
         const state = get();
-        const gift = state.equippedGifts.find(g => g.slot === slot);
+        const gift = state.equippedGifts.find(g => g.slot === slotId);
         if (!gift || !gift.giftId) return;
         if (state.syncEnhancementMats < 750 || state.syncSerumMats < 150) return;
         set((s) => ({
           syncEnhancementMats: s.syncEnhancementMats - 750,
           syncSerumMats: s.syncSerumMats - 150,
           equippedGifts: s.equippedGifts.map(g =>
-            g.slot === slot ? { ...g, syncLevel: g.syncLevel + 1 } : g
+            g.slot === slotId ? { ...g, syncLevel: g.syncLevel + 1 } : g
           ),
         }));
       },
@@ -1503,8 +1501,10 @@ const useGameStore = create<GameState>()(
         if (!gift || state.threads < gift.cost || state.managerLevel < 5) return;
         const newThreads = state.threads - gift.cost;
         const owned = state.ownedGifts.includes(giftId) ? state.ownedGifts : [...state.ownedGifts, giftId];
-        const newGifts = state.equippedGifts.map(slot =>
-          slot.slot === gift.slot ? { ...slot, giftId, level: 1, exp: 0, syncLevel: 0 } : slot
+        // Automatically equip to the gift's slot if empty
+        const slot = gift.slot;
+        const newGifts = state.equippedGifts.map(g =>
+          g.slot === slot ? { ...g, giftId, level: 1, exp: 0, syncLevel: 0 } : g
         );
         set({
           threads: newThreads,
@@ -1516,20 +1516,21 @@ const useGameStore = create<GameState>()(
         });
       },
 
-      equipOwnedGift: (giftId: string) => {
+      equipOwnedGift: (giftId: string, targetSlot?: EgoGiftSlot) => {
         const state = get();
         const gift = egoGifts.find(g => g.id === giftId);
         if (!gift) return;
         if (!state.ownedGifts.includes(giftId)) return;
-        const newGifts = state.equippedGifts.map(slot =>
-          slot.slot === gift.slot ? { ...slot, giftId, level: 1, exp: 0, syncLevel: 0 } : slot
+        const slot = targetSlot || gift.slot;
+        const newGifts = state.equippedGifts.map(g =>
+          g.slot === slot ? { ...g, giftId, level: 1, exp: 0, syncLevel: 0 } : g
         );
         set({ equippedGifts: newGifts });
       },
 
-      resonateGift: (slot: number, slotIndex: 1 | 2, stat: 'ATK' | 'HP' | 'DEF' | 'SPD') => {
+      resonateGift: (slotId: EgoGiftSlot, slotIndex: 1 | 2, stat: 'ATK' | 'HP' | 'DEF' | 'SPD') => {
         const state = get();
-        const current = state.giftResonance[slot] || { slot1: null, slot2: null };
+        const current = state.giftResonance[slotId] || { slot1: null, slot2: null };
         const key = slotIndex === 1 ? 'slot1' : 'slot2';
         if (current[key]) return;
         if (state.eclipseResonanceMaterials < 1) return;
@@ -1537,14 +1538,14 @@ const useGameStore = create<GameState>()(
           eclipseResonanceMaterials: s.eclipseResonanceMaterials - 1,
           giftResonance: {
             ...s.giftResonance,
-            [slot]: { ...current, [key]: stat },
+            [slotId]: { ...current, [key]: stat },
           },
         }));
       },
 
-      hypertuneGift: (slot: number) => {
+      hypertuneGift: (slotId: EgoGiftSlot) => {
         const state = get();
-        const currentLevel = state.giftHypertune[slot] || 0;
+        const currentLevel = state.giftHypertune[slotId] || 0;
         if (currentLevel >= 5) return;
         const nextLevel = currentLevel + 1;
         const cost = HYPERTUNE_LEVELS[nextLevel].cost;
@@ -1553,7 +1554,7 @@ const useGameStore = create<GameState>()(
           threads: s.threads - cost,
           giftHypertune: {
             ...s.giftHypertune,
-            [slot]: nextLevel,
+            [slotId]: nextLevel,
           },
         }));
       },
@@ -1580,36 +1581,105 @@ const useGameStore = create<GameState>()(
         }));
       },
 
+      // ─── Gift stats & resistances ─────────────────────────────────────
       getTotalGiftStats: () => {
         const state = get();
-        const totalStats = { hp: 0, atk: 0, def: 0, spd: 0 };
+        const total = {
+          hp: 0,
+          atk: 0,
+          def: 0,
+          spd: 0,
+          sanity: 0,
+          resistRed: 0,
+          resistPale: 0,
+          resistBlack: 0,
+          resistWhite: 0,
+          clashPower: 0,
+          healBonus: 0,
+        };
+
         state.equippedGifts.forEach(g => {
           const gift = egoGifts.find(eg => eg.id === g.giftId);
           if (!gift) return;
-          totalStats.hp += gift.stats.hp || 0;
-          totalStats.atk += gift.stats.atk || 0;
-          totalStats.def += gift.stats.def || 0;
-          totalStats.spd += gift.stats.spd || 0;
+          const converted = convertLegacyStats(gift.stats);
+          total.hp += converted.hp || 0;
+          total.atk += converted.atk || 0;
+          total.def += converted.def || 0;
+          total.spd += converted.spd || 0;
+          total.sanity += converted.sanity || 0;
+          total.clashPower += converted.clashPower || 0;
+          total.healBonus += converted.healBonus || 0;
+          total.resistRed += converted.resistRed || 0;
+          total.resistPale += converted.resistPale || 0;
+          total.resistBlack += converted.resistBlack || 0;
+          total.resistWhite += converted.resistWhite || 0;
+
+          // Resonance
           const res = state.giftResonance[g.slot];
           if (res) {
-            if (res.slot1) {
-              const bonus = RESONANCE_STATS[res.slot1];
-              if (bonus) { totalStats.atk += bonus.atk; totalStats.hp += bonus.hp; totalStats.def += bonus.def; }
+            const s1 = res.slot1 ? RESONANCE_STATS[res.slot1] : null;
+            const s2 = res.slot2 ? RESONANCE_STATS[res.slot2] : null;
+            if (s1) {
+              total.atk += s1.atk || 0;
+              total.hp += s1.hp || 0;
+              total.def += s1.def || 0;
+              total.spd += s1.spd || 0;
             }
-            if (res.slot2) {
-              const bonus = RESONANCE_STATS[res.slot2];
-              if (bonus) { totalStats.atk += bonus.atk; totalStats.hp += bonus.hp; totalStats.def += bonus.def; }
+            if (s2) {
+              total.atk += s2.atk || 0;
+              total.hp += s2.hp || 0;
+              total.def += s2.def || 0;
+              total.spd += s2.spd || 0;
             }
           }
+
+          // Hypertune
           const htLevel = state.giftHypertune[g.slot] || 0;
           const htStats = HYPERTUNE_LEVELS[htLevel]?.stats;
           if (htStats) {
-            totalStats.atk += htStats.atk;
-            totalStats.hp += htStats.hp;
-            totalStats.def += htStats.def;
+            total.atk += htStats.atk || 0;
+            total.hp += htStats.hp || 0;
+            total.def += htStats.def || 0;
+            total.spd += htStats.spd || 0;
           }
         });
-        return totalStats;
+        return total;
+      },
+
+      getTotalResistances: () => {
+        const stats = get().getTotalGiftStats();
+        return {
+          red: stats.resistRed,
+          pale: stats.resistPale,
+          black: stats.resistBlack,
+          white: stats.resistWhite,
+        };
+      },
+
+      getTotalSetBonuses: () => {
+        const state = get();
+        const equippedGiftObjects = state.equippedGifts
+          .map(g => egoGifts.find(eg => eg.id === g.giftId))
+          .filter((g): g is EgoGift => g !== undefined);
+        const setCounts = getSetCounts(equippedGiftObjects);
+        const activeBonuses: { setName: string; pieces: number; description: string; effect: string; active: boolean }[] = [];
+        for (const [setName, count] of Object.entries(setCounts)) {
+          const bonuses = setBonuses[setName] || [];
+          for (const bonus of bonuses) {
+            const isHarmonized = false; // could check weaponHarmonization if needed
+            const active = (bonus.pieces === 2 && count >= 2) ||
+                           (bonus.pieces === 4 && count >= 4 && isHarmonized) ||
+                           (bonus.pieces === 6 && count >= 6 && isHarmonized);
+            activeBonuses.push({
+              setName,
+              pieces: bonus.pieces,
+              description: bonus.description,
+              effect: bonus.effect,
+              active,
+            });
+          }
+        }
+        return activeBonuses;
       },
 
       // ── Story Progression ──────────────────────────────────────────────
@@ -1868,7 +1938,6 @@ const useGameStore = create<GameState>()(
         return picked.id;
       },
       adminGiveRandomSigWeapon: (): string | null => {
-        // No weapons in gacha, just return null
         return null;
       },
       adminMaxAllCharacters: () => {
@@ -1961,12 +2030,6 @@ const useGameStore = create<GameState>()(
         if (!identity) return;
         const weapon = weapons.find(w => w.id === weaponId);
         if (!weapon) return;
-        // Was `canEquipWeapon(identityId, weapon)` — passing the whole weapon
-        // OBJECT instead of its id string. canEquipWeapon does
-        // `weapons.find(w => w.id === weaponId)` internally, so comparing a
-        // string id to an object was always false — this made
-        // setEquippedWeapon silently no-op on every single call, for every
-        // identity, everywhere in the app.
         if (!canEquipWeapon(identityId, weaponId)) return;
         const ownedWeapon = state.ownedWeapons.find(w => w.weaponId === weaponId);
         if (!ownedWeapon) return;
@@ -1977,10 +2040,6 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // Adds a weapon to ownedWeapons if not already owned. Used to
-      // self-heal cases like Arthur's free signature weapon not being
-      // present in a save (e.g. from an older client version or a
-      // persistence path that bypassed the onRehydrateStorage backfill).
       grantWeapon: (weaponId: string) => {
         const state = get();
         if (state.ownedWeapons.some(w => w.weaponId === weaponId)) return;
@@ -2102,7 +2161,6 @@ const useGameStore = create<GameState>()(
         return { success: true };
       },
 
-      // ─── FIXED: deployAbnormality now uses actual abnormality data ────
       deployAbnormality: (abnoId: string, userId: string) => {
         const state = get();
         if (!state.facility.isActive) return { success: false, reason: 'No active facility' };
@@ -2113,7 +2171,6 @@ const useGameStore = create<GameState>()(
         if (state.facility.deployedToday.length >= maxPerDay) {
           return { success: false, reason: `Already deployed ${maxPerDay} abnormality today` };
         }
-        // ─── Get actual abnormality data ───
         const abnoData = abnormalities.find(a => a.id === abnoId);
         if (!abnoData) return { success: false, reason: 'Abnormality not found' };
         const deployCost = getDeployCost(state.facility.currentDay, abnoData.risk);
@@ -2208,7 +2265,7 @@ const useGameStore = create<GameState>()(
         }
 
         if (breached) {
-          // In a real system, we'd start a breach combat.
+          // breach handling
         }
 
         set((s) => ({
@@ -2319,8 +2376,6 @@ const useGameStore = create<GameState>()(
               deployedAbnos: updatedAbnos,
             },
           }));
-        } else {
-          // Breach continues – could spread or cause damage.
         }
       },
 
@@ -2444,22 +2499,10 @@ const useGameStore = create<GameState>()(
       },
 
       // ─── DUEL ACTIONS ────────────────────────────────────────────────────
-      startDuel: () => set((state) => ({
-        duel: { ...state.duel, active: true }
-      })),
-
-      endDuel: () => set((state) => ({
-        duel: { ...state.duel, active: false }
-      })),
-
-      updateDuelScore: (score: number) => set((state) => ({
-        duel: { ...state.duel, score: Math.max(0, score) }
-      })),
-
-      updateDuelLives: (lives: number) => set((state) => ({
-        duel: { ...state.duel, lives: Math.max(0, lives) }
-      })),
-
+      startDuel: () => set((state) => ({ duel: { ...state.duel, active: true } })),
+      endDuel: () => set((state) => ({ duel: { ...state.duel, active: false } })),
+      updateDuelScore: (score: number) => set((state) => ({ duel: { ...state.duel, score: Math.max(0, score) } })),
+      updateDuelLives: (lives: number) => set((state) => ({ duel: { ...state.duel, lives: Math.max(0, lives) } })),
       recordDuelResult: (result: 'win' | 'loss') => set((state) => ({
         duel: {
           ...state.duel,
@@ -2473,13 +2516,6 @@ const useGameStore = create<GameState>()(
       version: STORE_VERSION,
       migrate: (persistedState: any, version: number) => {
         let newState = { ...persistedState };
-
-        // ─── Clean up old Duel data ────────────────────────────────────
-        delete newState.duelWins;
-        delete newState.duelLosses;
-        delete newState.duelStreak;
-        delete newState.duelHistory;
-        delete newState.duel;
 
         // ─── Ensure facility exists ────────────────────────────────────
         if (!newState.facility) {
@@ -2530,27 +2566,49 @@ const useGameStore = create<GameState>()(
           ];
         }
 
-        // ─── Rename excalibur_greatsword → excalibur_greatsword ──────────────
-        if (version < 25) {
-          if (Array.isArray(newState.ownedWeapons)) {
-            newState.ownedWeapons = newState.ownedWeapons.map((w: any) => ({
-              ...w,
-              weaponId: w.weaponId === 'excalibur_greatsword' ? 'excalibur_greatsword' : w.weaponId,
-            }));
-          }
-          if (Array.isArray(newState.ownedIdentities)) {
-            newState.ownedIdentities = newState.ownedIdentities.map((o: any) => ({
-              ...o,
-              equippedWeaponId: o.equippedWeaponId === 'excalibur_greatsword' ? 'excalibur_greatsword' : o.equippedWeaponId,
-            }));
-          }
-          if (newState.banners) {
-            for (const key of ['weapon', 'rerun_weapon']) {
-              if (newState.banners[key] && newState.banners[key].selectedWeaponId === 'excalibur_greatsword') {
-                newState.banners[key].selectedWeaponId = 'excalibur_greatsword';
-              }
+        // ─── Migrate old gift slots (version < 26) ────────────────────
+        if (version < 26) {
+          // Convert numeric gift slots to string slot IDs
+          const oldGifts = newState.equippedGifts || [];
+          const slotMap: Record<number, EgoGiftSlot> = {
+            1: 'left_back',
+            2: 'right_back',
+            3: 'mouth',
+            4: 'mouth2',
+            5: 'face',
+            6: 'eye',
+          };
+          const newGifts = EGO_GIFT_SLOTS.map(slot => {
+            const old = oldGifts.find((g: any) => g.slot === parseInt(Object.keys(slotMap).find(k => slotMap[parseInt(k)] === slot.id) || '0'));
+            return {
+              slot: slot.id,
+              giftId: old?.giftId || '',
+              level: old?.level || 1,
+              exp: old?.exp || 0,
+              syncLevel: old?.syncLevel || 0,
+            };
+          });
+          newState.equippedGifts = newGifts;
+
+          // Convert giftResonance and giftHypertune keys
+          const oldRes = newState.giftResonance || {};
+          const oldHypertune = newState.giftHypertune || {};
+          const newRes: Record<EgoGiftSlot, { slot1: string | null; slot2: string | null }> = {};
+          const newHypertune: Record<EgoGiftSlot, number> = {};
+          for (const [key, value] of Object.entries(oldRes)) {
+            const num = parseInt(key);
+            if (!isNaN(num) && slotMap[num]) {
+              newRes[slotMap[num]] = value;
             }
           }
+          for (const [key, value] of Object.entries(oldHypertune)) {
+            const num = parseInt(key);
+            if (!isNaN(num) && slotMap[num]) {
+              newHypertune[slotMap[num]] = value;
+            }
+          }
+          newState.giftResonance = newRes;
+          newState.giftHypertune = newHypertune;
         }
 
         // ─── Clean arrays ──────────────────────────────────────────────
@@ -2705,248 +2763,4 @@ const useGameStore = create<GameState>()(
         expSerumXL: state.expSerumXL,
         weaponParts: state.weaponParts,
         syncEnhancementMats: state.syncEnhancementMats,
-        syncSerumMats: state.syncSerumMats,
-        lowTierMats: state.lowTierMats,
-        currentChapter: state.currentChapter,
-        storyAllies: state.storyAllies,
-        storyRoster: state.storyRoster,
-        completedChapters: state.completedChapters,
-        nodeCompletion: state.nodeCompletion,
-        dailyTasks: state.dailyTasks,
-        weeklyTasks: state.weeklyTasks,
-        competitiveScore: state.competitiveScore,
-        competitivePlayed: state.competitivePlayed,
-        crRegion: state.crRegion,
-        crRegionLocked: state.crRegionLocked,
-        crWeek: state.crWeek,
-        crZoneScores: state.crZoneScores,
-        crCompletedZones: state.crCompletedZones,
-        crMerit: state.crMerit,
-        crReputation: state.crReputation,
-        crSquad: state.crSquad,
-        totalEnemyDefeats: state.totalEnemyDefeats,
-        banners: state.banners,
-        team: state.team,
-        leaderIndex: state.leaderIndex,
-        shardInventory: state.shardInventory,
-        ssrInverseMaterial: state.ssrInverseMaterial,
-        srInverseMaterial: state.srInverseMaterial,
-        purchasedShards: state.purchasedShards,
-        seenTutorials: state.seenTutorials,
-        pendingTutorialKey: state.pendingTutorialKey,
-        pendingTutorialSequence: state.pendingTutorialSequence,
-        currentTutorialStep: state.currentTutorialStep,
-        giftResonance: state.giftResonance,
-        giftHypertune: state.giftHypertune,
-        weaponHarmonization: state.weaponHarmonization,
-        lastDailyReset: state.lastDailyReset,
-        lastWeeklyReset: state.lastWeeklyReset,
-        allDailyBonusClaimed: state.allDailyBonusClaimed,
-        allWeeklyBonusClaimed: state.allWeeklyBonusClaimed,
-        specialDebuffActive: state.specialDebuffActive,
-        pullHistory: state.pullHistory,
-        roverAwakened: state.roverAwakened,
-        trialIdentities: state.trialIdentities,
-        temporaryTrialIds: state.temporaryTrialIds,
-        awakeningRewardsGranted: state.awakeningRewardsGranted,
-        currentForcedIdentity: state.currentForcedIdentity,
-        currentUseDawnbreaker: state.currentUseDawnbreaker,
-        currentJoinAllies: state.currentJoinAllies,
-        currentChapterId: state.currentChapterId,
-        pendingChapterRewards: state.pendingChapterRewards,
-        egoManifestEssence: state.egoManifestEssence,
-        resonance: state.resonance,
-        facility: state.facility,
-        duel: state.duel,
-      }),
-    }
-  )
-);
-
-// ─── Helper: pullOne ──────────────────────────────────────────────────
-function pullOne(banner: BannerState, bannerType: BannerType): GachaResult {
-  const isFate = bannerType === 'fate' || bannerType === 'rerun_fate';
-  const isRerun = bannerType === 'rerun' || bannerType === 'rerun_fate';
-  const isWeapon = bannerType === 'weapon' || bannerType === 'rerun_weapon';
-  const isFeatured = bannerType === 'featured';
-  const isStandard = bannerType === 'standard';
-
-  const ssrRate = isWeapon ? 0.05 : isFate ? 0.015 : 0.005;
-  const srRate = isWeapon ? 0.135 : 0.025;
-
-  const pity = banner.pity + 1;
-  let pityCap: number;
-  if (isFate) {
-    pityCap = banner.floatingGuarantee || 80;
-  } else if (isWeapon) {
-    pityCap = 40;
-  } else {
-    pityCap = 60;
-  }
-  const isGuaranteed = pity >= pityCap;
-
-  let rarity: 'SSR' | 'SR' | 'material';
-  if (isGuaranteed) {
-    rarity = 'SSR';
-  } else if (isWeapon) {
-    const roll = Math.random();
-    if (roll < ssrRate) rarity = 'SSR';
-    else if (roll < ssrRate + srRate) rarity = 'SR';
-    else rarity = 'material';
-  } else {
-    if (Math.random() < ssrRate) rarity = 'SSR';
-    else if ((pity % 10 === 0) || Math.random() < srRate) rarity = 'SR';
-    else rarity = 'material';
-  }
-
-  if (rarity === 'SSR') {
-    if (isWeapon) {
-      const target = banner.selectedWeaponId;
-      if (banner.calibrationActive && banner.calibrationTarget === target) {
-        const found = weapons.find(w => w.id === target && w.rarity === 'SSR' && w.inGacha);
-        if (found) {
-          banner.calibrationActive = false;
-          banner.calibrationTarget = null;
-          return { type: 'weapon', rarity: 'SSR', id: found.id, name: found.name };
-        }
-      }
-      const pool = weapons.filter(w => w.rarity === 'SSR' && w.inGacha);
-      let picked: Weapon;
-      if (target && Math.random() < 0.8) {
-        const found = pool.find(w => w.id === target);
-        if (found) {
-          banner.calibrationActive = false;
-          banner.calibrationTarget = null;
-          return { type: 'weapon', rarity: 'SSR', id: found.id, name: found.name };
-        }
-      }
-      const offTargetPool = pool.filter(w => w.id !== target);
-      if (offTargetPool.length === 0) {
-        picked = pool[Math.floor(Math.random() * pool.length)];
-      } else {
-        picked = offTargetPool[Math.floor(Math.random() * offTargetPool.length)];
-      }
-      banner.calibrationActive = true;
-      banner.calibrationTarget = target;
-      return { type: 'weapon', rarity: 'SSR', id: picked.id, name: picked.name };
-    }
-
-    let pickedId: string;
-    if (isFeatured || isFate) {
-      const featuredPool = ['arthur_excalibur'];
-      const validFeatured = featuredPool.filter(id => identities.some(i => i.id === id && i.rarity === 'SSR'));
-      if (validFeatured.length === 0) {
-        const fallbackPool = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
-        pickedId = fallbackPool[Math.floor(Math.random() * fallbackPool.length)].id;
-      } else {
-        pickedId = validFeatured[Math.floor(Math.random() * validFeatured.length)];
-      }
-    } else if (isRerun) {
-      const isRateUp = Math.random() < 0.7;
-      if (isRateUp) {
-        const rerunPool = ['arthur_excalibur'];
-        const validRerun = rerunPool.filter(id => identities.some(i => i.id === id && i.rarity === 'SSR'));
-        if (validRerun.length === 0) {
-          const fallbackPool = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
-          pickedId = fallbackPool[Math.floor(Math.random() * fallbackPool.length)].id;
-        } else {
-          pickedId = validRerun[Math.floor(Math.random() * validRerun.length)];
-        }
-      } else {
-        const offPool = identities.filter(i =>
-          i.rarity === 'SSR' &&
-          i.id !== 'arthur_excalibur' &&
-          !storyOnlyIdentities.has(i.id)
-        );
-        if (offPool.length === 0) {
-          const fallback = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
-          pickedId = fallback[Math.floor(Math.random() * fallback.length)].id;
-        } else {
-          pickedId = offPool[Math.floor(Math.random() * offPool.length)].id;
-        }
-      }
-    } else if (isStandard) {
-      const pool = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
-      if (pool.length === 0) throw new Error('No SSR identities in standard pool');
-      pickedId = pool[Math.floor(Math.random() * pool.length)].id;
-    } else {
-      const pool = identities.filter(i => i.rarity === 'SSR' && i.id !== 'arthur_excalibur' && !storyOnlyIdentities.has(i.id));
-      pickedId = pool[Math.floor(Math.random() * pool.length)].id;
-    }
-    const identity = identities.find(i => i.id === pickedId)!;
-    return { type: 'identity', rarity: 'SSR', id: pickedId, name: identity.name, shards: 20 };
-  }
-
-  if (rarity === 'SR') {
-    if (isWeapon) {
-      const target = banner.selectedWeaponId;
-      let srUpId: string | undefined;
-      const targetWeapon = weapons.find(w => w.id === target);
-      if (targetWeapon && targetWeapon.signatureFor) {
-        const fallback = weapons.find(w => w.fallbackFor === targetWeapon.signatureFor && w.inGacha);
-        srUpId = fallback?.id;
-      }
-      const pool = weapons.filter(w => w.rarity === 'SR' && w.inGacha);
-      let picked: Weapon;
-      if (srUpId && Math.random() < 0.8889) {
-        const found = pool.find(w => w.id === srUpId);
-        if (found) picked = found;
-        else picked = pool[Math.floor(Math.random() * pool.length)];
-      } else {
-        const otherPool = srUpId ? pool.filter(w => w.id !== srUpId) : pool;
-        picked = otherPool[Math.floor(Math.random() * otherPool.length)];
-      }
-      return { type: 'weapon', rarity: 'SR', id: picked.id, name: picked.name };
-    } else {
-      if (isStandard) {
-        const target = banner.selectedTargetId;
-        let srPool = identities.filter(i => i.rarity === 'SR' && !storyOnlyIdentities.has(i.id));
-        if (banner.featuredId) {
-          srPool = srPool.filter(i => i.id !== banner.featuredId);
-        }
-        let pickedId: string;
-        if (pity % 10 === 0 && target && srPool.some(i => i.id === target)) {
-          pickedId = target;
-        } else {
-          if (target && Math.random() < 0.5 && srPool.some(i => i.id === target)) {
-            pickedId = target;
-          } else {
-            if (srPool.length === 0) throw new Error('No SR identities in standard pool');
-            pickedId = srPool[Math.floor(Math.random() * srPool.length)].id;
-          }
-        }
-        const identity = identities.find(i => i.id === pickedId)!;
-        return { type: 'identity', rarity: 'SR', id: pickedId, name: identity.name, shards: 8 };
-      } else {
-        let pool = identities.filter(i => i.rarity === 'SR' && !storyOnlyIdentities.has(i.id));
-        if (pool.length === 0) throw new Error('No SR identities in featured pool');
-        const picked = pool[Math.floor(Math.random() * pool.length)];
-        return { type: 'identity', rarity: 'SR', id: picked.id, name: picked.name, shards: 8 };
-      }
-    }
-  }
-
-  // Materials
-  const materialRoll = Math.random();
-  if (materialRoll < 0.1542) {
-    return { type: 'material', rarity: 'material', id: 'expSerum', name: 'EXP Essence x2' };
-  } else if (materialRoll < 0.1542 + 0.1439) {
-    return { type: 'material', rarity: 'material', id: 'weapon_parts', name: 'Forge Alloy x2' };
-  } else if (materialRoll < 0.1542 + 0.1439 + 0.1439) {
-    return { type: 'material', rarity: 'material', id: 'threads', name: 'Sigil Strands x1' };
-  } else if (materialRoll < 0.1542 + 0.1439 + 0.1439 + 0.1042) {
-    return { type: 'material', rarity: 'material', id: 'lowTierMats', name: 'Qliphoth Dust x3' };
-  } else if (materialRoll < 0.1542 + 0.1439 + 0.1439 + 0.1042 + 0.1027) {
-    return { type: 'material', rarity: 'material', id: 'syncEnhancementMats', name: 'Sync Materials x1' };
-  } else {
-    const otherPool = [
-      { id: 'expSerum', name: 'EXP Essence x1' },
-      { id: 'weapon_parts', name: 'Forge Alloy x1' },
-      { id: 'lowTierMats', name: 'Qliphoth Dust x2' },
-    ];
-    const picked = otherPool[Math.floor(Math.random() * otherPool.length)];
-    return { type: 'material', rarity: 'material', id: picked.id, name: picked.name };
-  }
-}
-
-export default useGameStore;
+        syncSerumMats: state
