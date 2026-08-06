@@ -1,6 +1,6 @@
 // src/components/MovesetTab.tsx
 import useGameStore from '../store/gameStore';
-import { movesetsData } from '../data/movesets'; // adjust path if needed
+const movesetsData = require('../data/movesets'); // if using .js
 import BloodLunacyMilestone from './BloodLunacyMilestone'; // we'll create this
 
 const RANK_EMOJIS: Record<string, string> = {
