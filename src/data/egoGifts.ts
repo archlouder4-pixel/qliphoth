@@ -1,1277 +1,869 @@
-// egoGifts.ts – Full file with PGR-style set bonuses, resonance, and hypertune
-// Includes new class-specific buff relics for slots 5-6
+// src/data/egoGifts.ts
+import { getClassCategory, type CombatCategory } from './identities';
+
+// ─── Slot Definitions ──────────────────────────────────────────────────
+export type EgoGiftSlot =
+  | 'left_back'
+  | 'right_back'
+  | 'mouth'
+  | 'mouth2'
+  | 'face'
+  | 'eye'
+  | 'cheek'
+  | 'helmet'
+  | 'hat'
+  | 'neck'
+  | 'torso'
+  | 'waist'
+  | 'hand1'
+  | 'hand2'
+  | 'armband';
+
+export const EGO_GIFT_SLOTS: { id: EgoGiftSlot; name: string; type: 'set' | 'buff'; description: string }[] = [
+  { id: 'left_back',   name: 'Left Back',   type: 'set', description: 'Left shoulder blade attachment' },
+  { id: 'right_back',  name: 'Right Back',  type: 'set', description: 'Right shoulder blade attachment' },
+  { id: 'mouth',       name: 'Mouth',       type: 'set', description: 'Oral accessories and face coverings' },
+  { id: 'mouth2',      name: 'Mouth 2',     type: 'set', description: 'Secondary oral accessories' },
+  { id: 'face',        name: 'Face',        type: 'set', description: 'Facial adornments and masks' },
+  { id: 'eye',         name: 'Eye',         type: 'set', description: 'Eye-related accessories' },
+  { id: 'cheek',       name: 'Cheek',       type: 'set', description: 'Cheek and cheekbone attachments' },
+  { id: 'helmet',      name: 'Helmet',      type: 'set', description: 'Head and helmet attachments' },
+  { id: 'hat',         name: 'Hat',         type: 'set', description: 'Headwear and hats' },
+  { id: 'neck',        name: 'Neck',        type: 'set', description: 'Neck and throat accessories' },
+  { id: 'torso',       name: 'Torso',       type: 'set', description: 'Chest and body attachments' },
+  { id: 'waist',       name: 'Waist',       type: 'set', description: 'Waist and belt accessories' },
+  { id: 'hand1',       name: 'Hand 1',      type: 'set', description: 'Right hand attachments' },
+  { id: 'hand2',       name: 'Hand 2',      type: 'set', description: 'Left hand attachments' },
+  { id: 'armband',     name: 'Armband',     type: 'buff', description: 'Arm and shoulder accessories' },
+];
+
+// ─── Gift Stats – includes resistances ──────────────────────────────
+export interface EgoGiftStats {
+  hp?: number;
+  atk?: number;
+  def?: number;
+  spd?: number;
+  sanity?: number;
+  resistRed?: number;
+  resistPale?: number;
+  resistBlack?: number;
+  resistWhite?: number;
+  clashPower?: number;
+  healBonus?: number;
+  // Legacy fields (converted)
+  fortitude?: number;
+  prudence?: number;
+  temperance?: number;
+  justice?: number;
+}
 
 export interface EgoGift {
   id: string;
   name: string;
-  slot: number;
+  slot: EgoGiftSlot;
   set: string | null;
-  rarity: 'SR' | 'SSR';
-  stats: { hp?: number; atk?: number; def?: number; spd?: number };
+  rarity: 'SR' | 'SSR' | 'HE' | 'WAW' | 'ALEPH' | 'TETH' | 'ZAYIN';
+  stats: EgoGiftStats;
   description: string;
   icon: string;
-  cost: number; // threads cost
-  signatureFor?: string; // identity id this set is for
+  cost: number;
+  signatureFor?: string;
+  classRequirement?: CombatCategory;
+  special?: string;
 }
 
-// ── Resonance stat bonuses ──
-export const RESONANCE_STATS: Record<string, { atk: number; hp: number; def: number }> = {
-  ATK: { atk: 15, hp: 0, def: 0 },
-  HP: { atk: 0, hp: 80, def: 0 },
-  DEF: { atk: 0, hp: 0, def: 10 },
-  SPD: { atk: 5, hp: 0, def: 0 },
-};
+// ─── Set Bonuses ──────────────────────────────────────────────────────
+export interface SetBonus {
+  pieces: number;
+  description: string;
+  effect: string;
+}
 
-// ── Hypertune (Qliphoth Sync) levels ──
-export const HYPERTUNE_LEVELS = [
-  { level: 0, cost: 0, stats: { atk: 0, hp: 0, def: 0 } },
-  { level: 1, cost: 500, stats: { atk: 10, hp: 50, def: 5 } },
-  { level: 2, cost: 1000, stats: { atk: 20, hp: 100, def: 10 } },
-  { level: 3, cost: 2000, stats: { atk: 35, hp: 175, def: 15 } },
-  { level: 4, cost: 3500, stats: { atk: 50, hp: 250, def: 25 } },
-  { level: 5, cost: 5000, stats: { atk: 70, hp: 350, def: 35 } },
-];
-
-// ── PGR-style Set Bonuses ──
-// 2pc: Basic stat bonuses
-// 4pc: Signature effects that require Harmonization to activate
-export const setBonuses: Record<string, { pieces: number; description: string; effect: string }[]> = {
-  // ═══════════════════════════════════════════════════════
-  // SSR SIGNATURE 4-PIECE SETS (Require Harmonization for 4pc)
-  // ═══════════════════════════════════════════════════════
-
-  // Rover Eclipse - Eclipse Sovereign
-  'Eclipse Sovereign': [
-    { pieces: 2, description: 'ATK +5%, Void DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill damage ×2 on clash win. After casting Ego, gain 20% SP.', effect: 'ego_double_on_win:true,sp_gain:20' },
+export const setBonuses: Record<string, SetBonus[]> = {
+  // ARTHUR
+  'Excalibur Sovereign': [
+    { pieces: 2, description: 'ATK +5%, Pale DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
+    { pieces: 4, description: 'True Execution +100% vs Wither. +2 Resolve on Ego.', effect: 'execution_wither_bonus:1.00,resolve_on_ego:2' },
+    { pieces: 6, description: 'Pale DMG +15%. Wither cap 15. True Execution ignores 30% DEF.', effect: 'pale_dmg:0.15,wither_cap:15,def_ignore:0.30' },
   ],
-
-  // Apollyon Abyss - Abyss Sovereign
-  'Abyss Sovereign': [
+  'Weeping Garden': [
+    { pieces: 2, description: 'ATK +5%, Healing +5%', effect: 'atk_pct:0.05,heal_pct:0.05' },
+    { pieces: 4, description: 'Bleed detonate 300%. +2 Resolve on Ego.', effect: 'bleed_detonate:3.00,resolve_on_ego:2' },
+    { pieces: 6, description: 'Bleed DMG +50%. Bleed heals 10%. Ego revives 30% HP.', effect: 'bleed_dmg:0.50,bleed_heal:0.10,revive:0.30' },
+  ],
+  'Eclipse of Oblivion': [
     { pieces: 2, description: 'ATK +5%, Dark DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill applies 2 random debuffs and deals 30% bonus damage to debuffed enemies.', effect: 'ego_debuff:2,ego_dmg_vs_debuff:0.30' },
+    { pieces: 4, description: '+50% dmg per 10 Shadow Marks. +5 Marks on Ego.', effect: 'shadow_mark_dmg:0.50,shadow_mark_apply:5' },
+    { pieces: 6, description: 'Shadow cap 12. +30% crit vs 8+ Marks. +2 Eclipse on Ego.', effect: 'shadow_cap:12,shadow_crit:0.30,eclipse_on_ego:2' },
   ],
-
-  // Verg - Dark Slayer
-  'Dark Slayer': [
-    { pieces: 2, description: 'ATK +5%, Dark DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill ignores 30% DEF. If enemy is below 50% HP, Ego skill deals 50% bonus damage.', effect: 'ego_def_ignore:0.30,ego_execute_bonus:0.50' },
-  ],
-
-  // Sparda - Legendary Knight
-  'Legendary Knight': [
-    { pieces: 2, description: 'ATK +5%, Dark DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill grants all allies 25% HP shield and +20% ATK for 2 turns.', effect: 'ego_shield:0.25,ego_atk_buff:0.20' },
-  ],
-
-  // Rin - Devil Hunter
-  'Devil Hunter': [
-    { pieces: 2, description: 'ATK +5%, Fire DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill deals 40% bonus damage and refreshes all normal skill cooldowns.', effect: 'ego_dmg_bonus:0.40,ego_reset_cooldowns:true' },
-  ],
-
-  // Butterfly - Funeral
-  'Funeral': [
-    { pieces: 2, description: 'ATK +5%, Void DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill executes enemies below 25% HP. On kill, gain 30% HP and 20 SP.', effect: 'ego_execute:0.25,ego_kill_heal:0.30,ego_kill_sp:20' },
-  ],
-
-  // Miastro - Orchestra
-  'Orchestra': [
-    { pieces: 2, description: 'ATK +5%, Light DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill buffs all allies\' ATK by 30% for 2 turns. Heals all allies for 20% of damage dealt.', effect: 'ego_atk_buff:0.30,ego_heal:0.20' },
-  ],
-
-  // Don Papa - Shorekeeper
-  'Shorekeeper': [
-    { pieces: 2, description: 'ATK +5%, Fire DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill detonates all Bleed stacks for 300% damage. Applies 3 Bleed to all enemies.', effect: 'ego_bleed_detonate:3.00,ego_bleed_apply:3' },
-  ],
-
-  // Aemeath - Threnodia
-  'Threnodia': [
-    { pieces: 2, description: 'ATK +5%, Spectro DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill consumes all Concerto for 15% bonus damage per stack (max 150%).', effect: 'ego_concerto_dmg:0.15,ego_max_bonus:1.50' },
-  ],
-
-  // Shorekeeper - Eternal Tide
-  'Eternal Tide': [
-    { pieces: 2, description: 'ATK +5%, Water DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill heals all allies for 50% of damage dealt and grants +25% healing for 2 turns.', effect: 'ego_heal:0.50,ego_heal_buff:0.25' },
-  ],
-
-  // Xenon - Chaos Sovereign
-  'Chaos Sovereign': [
-    { pieces: 2, description: 'ATK +5%, Chaos DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill applies random debuff to all enemies. Deals 30% bonus damage per debuff on target (max 90%).', effect: 'ego_debuff_all:true,ego_dmg_per_debuff:0.30' },
-  ],
-
-  // ─── NEW: Doran's Set: Warden's Judgment ───
-  'Warden\'s Judgment': [
-    { pieces: 2, description: 'ATK +5%, Physical DMG +5%', effect: 'atk_pct:0.05,element_dmg:0.05' },
-    { pieces: 4, description: 'Ego skill applies 3 Dull stacks to all enemies and deals 40% bonus damage to bleeding enemies.', effect: 'ego_dull:3,ego_dmg_vs_bleed:0.40' },
-  ],
-
-  // ─── NEW: Gwendolyn's Set: Oath of Faith ───
-  'Oath of Faith': [
+  'Dawn of Sacrifice': [
     { pieces: 2, description: 'ATK +5%, DEF +5%', effect: 'atk_pct:0.05,def_pct:0.05' },
-    { pieces: 4, description: 'Ego skill grants all allies a shield equal to 35% of Gwendolyn\'s max HP and reduces enemy ATK by 25% for 2 turns.', effect: 'ego_shield:0.35,ego_enemy_atk_down:0.25' },
+    { pieces: 4, description: '50% shield, +30% heal, cleanse on Ego.', effect: 'shield:0.50,heal_buff:0.30,cleanse_allies:true' },
+    { pieces: 6, description: 'Shield +25%. Radiance = +5% ATK/stack. Ego heals 30%.', effect: 'shield_bonus:0.25,radiance_atk:0.05,ego_heal:0.30' },
   ],
-
-  // ─── NEW: Mira's Set: Shepherd's Lament ───
-  'Shepherd\'s Lament': [
+  'Crimson Carnage': [
+    { pieces: 2, description: 'ATK +5%, Crit +5%', effect: 'atk_pct:0.05,crit_rate:0.05' },
+    { pieces: 4, description: '+25% dmg per 5 Fury. +2 Golden Heart on Ego.', effect: 'fury_dmg:0.25,golden_heart:2' },
+    { pieces: 6, description: 'Fury cap 15. +50% crit at 10 Fury. +5 Hemorrhage on Ego.', effect: 'fury_cap:15,fury_crit:0.50,hemorrhage_apply:5' },
+  ],
+  'Drowned Cathedral': [
+    { pieces: 2, description: 'ATK +5%, DEF +5%', effect: 'atk_pct:0.05,def_pct:0.05' },
+    { pieces: 4, description: '+50% vs 8+ Drowning. 30% shield on Ego.', effect: 'drowning_dmg:0.50,shield:0.30' },
+    { pieces: 6, description: 'Drowning -5% ATK/stack. Shield +20%. +5 Drowning on Ego.', effect: 'drowning_atk:0.05,shield_bonus:0.20,drowning_apply:5' },
+  ],
+  'Unchained Rage': [
+    { pieces: 2, description: 'ATK +5%, HP +5%', effect: 'atk_pct:0.05,hp_pct:0.05' },
+    { pieces: 4, description: '+15% dmg per Rage. +5 Bleed + 50% heal on Ego.', effect: 'rage_dmg:0.15,bleed_apply:5,heal:0.50' },
+    { pieces: 6, description: 'Rage cap 10. +20% lifesteal at 5 Rage. 30% shield on Ego.', effect: 'rage_cap:10,lifesteal:0.20,shield_allies:0.30' },
+  ],
+  'Vengeance': [
     { pieces: 2, description: 'ATK +5%, Healing +5%', effect: 'atk_pct:0.05,heal_pct:0.05' },
-    { pieces: 4, description: 'Ego skill heals all allies for 60% of damage dealt and extends all Bleed durations by 2 turns.', effect: 'ego_heal:0.60,ego_bleed_extend:2' },
+    { pieces: 4, description: 'Revive 40% HP. +5 Weaken + 3 Resolve on Ego.', effect: 'revive:0.40,weaken_apply:5,resolve:3' },
+    { pieces: 6, description: 'Weaken -10% ATK. Resolve +8% dmg/stack. 40% shield on Ego.', effect: 'weaken_atk:0.10,resolve_dmg:0.08,shield:0.40' },
   ],
-
-  // ═══════════════════════════════════════════════════════
-  // SSR 2-PIECE SETS (Slots 5-6)
-  // ═══════════════════════════════════════════════════════
-
-  'Eclipse Echo': [
-    { pieces: 2, description: 'ATK +5%, All Element DMG +5%', effect: 'atk_pct:0.05,all_element_dmg:0.05' },
+  'Perfect Balance': [
+    { pieces: 2, description: 'ATK +5%, All Element +5%', effect: 'atk_pct:0.05,all_element_dmg:0.05' },
+    { pieces: 4, description: '+50% when buffs=debuffs. +3 Harmony/Dissonance on Ego.', effect: 'balance_dmg:0.50,harmony:3,dissonance:3' },
+    { pieces: 6, description: 'Harmony +10% ATK/stack. Dissonance -5% DEF/stack. Ego heals 25%.', effect: 'harmony_atk:0.10,dissonance_def:0.05,ego_heal:0.25' },
   ],
-  'Devil Pact': [
-    { pieces: 2, description: 'ATK +5%, Crit Rate +5%', effect: 'atk_pct:0.05,crit_rate:0.05' },
-  ],
-  'Stellar Veil': [
+  'Blood Shepherd': [
     { pieces: 2, description: 'ATK +5%, Healing +5%', effect: 'atk_pct:0.05,heal_pct:0.05' },
+    { pieces: 4, description: '40% heal on damage. +5 Bleed + 2 Golden Heart on Ego.', effect: 'heal_on_dmg:0.40,bleed_apply:5,golden_heart:2' },
+    { pieces: 6, description: 'Bleed +40% dmg. +20% heal below 50%. Ego revives 25%.', effect: 'bleed_dmg:0.40,heal_low:0.20,revive:0.25' },
   ],
-  'Voidborne': [
-    { pieces: 2, description: 'ATK +5%, All Element DMG +5%', effect: 'atk_pct:0.05,all_element_dmg:0.05' },
-  ],
-
-  // ═══════════════════════════════════════════════════════
-  // SR 2-PIECE SETS (Slots 5-6)
-  // ═══════════════════════════════════════════════════════
-
-  'Vitality': [
-    { pieces: 2, description: 'ATK +3%, HP +7%', effect: 'atk_pct:0.03,hp_pct:0.07' },
-  ],
-  'Aggression': [
-    { pieces: 2, description: 'ATK +3%, Fire DMG +7%', effect: 'atk_pct:0.03,element_dmg:0.07' },
-  ],
-  'Bulwark': [
-    { pieces: 2, description: 'ATK +3%, DEF +7%', effect: 'atk_pct:0.03,def_pct:0.07' },
-  ],
-  'Swiftness': [
-    { pieces: 2, description: 'ATK +3%, SPD +7%', effect: 'atk_pct:0.03,spd_pct:0.07' },
-  ],
-  'Entropy': [
-    { pieces: 2, description: 'ATK +3%, Chaos DMG +7%', effect: 'atk_pct:0.03,element_dmg:0.07' },
+  'Void Echo': [
+    { pieces: 2, description: 'ATK +5%, SPD +5%', effect: 'atk_pct:0.05,spd_pct:0.05' },
+    { pieces: 4, description: '+30% dmg per 5 Echo. +5 Echo + 3 Weaken on Ego.', effect: 'echo_dmg:0.30,echo_apply:5,weaken_apply:3' },
+    { pieces: 6, description: 'Echo -4% DEF/stack. Weaken cap 6. +2 Shadow on Ego.', effect: 'echo_def:0.04,weaken_cap:6,shadow_apply:2' },
   ],
 
-  // ═══════════════════════════════════════════════════════
-  // NEW: Element Corrosion Set (Hybrid 2pc/4pc)
-  // ═══════════════════════════════════════════════════════
-
-  'Corrosion': [
-    { pieces: 2, description: 'ATK +3%, Element DMG +7%', effect: 'atk_pct:0.03,element_dmg:0.07' },
-    { pieces: 4, description: 'Extra DMG Bonus +10%. Attacks apply Element Corrosion (-15% RES). Corroded targets trigger Element Blast (600% DMG, 6s CD).', effect: 'corrosion:true,element_blast:true' },
+  // Class-specific buff sets (armband)
+  "Attacker's Edge": [
+    { pieces: 1, description: 'ATK +5%, Crit Rate +5%', effect: 'atk_pct:0.05,crit_rate:0.05' },
   ],
-
-  // ═══════════════════════════════════════════════════════
-  // NEW: Class-specific SSR 2-PIECE BUFF SETS (Slots 5-6)
-  // ═══════════════════════════════════════════════════════
-
-  'Attacker\'s Edge': [
-    { pieces: 2, description: 'ATK +5%, Crit Rate +5%', effect: 'atk_pct:0.05,crit_rate:0.05' },
+  "Tank's Bastion": [
+    { pieces: 1, description: 'DEF +10%, HP +10%', effect: 'def_pct:0.10,hp_pct:0.10' },
   ],
-  'Tank\'s Bastion': [
-    { pieces: 2, description: 'DEF +10%, HP +10%', effect: 'def_pct:0.10,hp_pct:0.10' },
+  "Amplifier's Resonance": [
+    { pieces: 1, description: 'Element DMG +10%, Healing +5%', effect: 'element_dmg:0.10,heal_pct:0.05' },
   ],
-  'Amplifier\'s Resonance': [
-    { pieces: 2, description: 'Element DMG +10%, Healing +5%', effect: 'element_dmg:0.10,heal_pct:0.05' },
-  ],
-  'Support\'s Grace': [
-    { pieces: 2, description: 'Healing +10%, SPD +10%', effect: 'heal_pct:0.10,spd_pct:0.10' },
+  "Support's Grace": [
+    { pieces: 1, description: 'Healing +10%, SPD +10%', effect: 'heal_pct:0.10,spd_pct:0.10' },
   ],
 };
 
-// ── All Ego Gifts ──
+// ─── Legacy Stat Conversion ────────────────────────────────────────────
+export function convertLegacyStats(stats: EgoGiftStats): EgoGiftStats {
+  const result: EgoGiftStats = { ...stats };
+  if (stats.fortitude !== undefined) {
+    result.hp = (result.hp || 0) + stats.fortitude * 10;
+    delete result.fortitude;
+  }
+  if (stats.prudence !== undefined) {
+    result.sanity = (result.sanity || 0) + stats.prudence * 5;
+    delete result.prudence;
+  }
+  if (stats.temperance !== undefined) {
+    result.healBonus = (result.healBonus || 0) + stats.temperance * 2;
+    delete result.temperance;
+  }
+  if (stats.justice !== undefined) {
+    result.atk = (result.atk || 0) + stats.justice * 2;
+    result.clashPower = (result.clashPower || 0) + stats.justice * 1;
+    delete result.justice;
+  }
+  return result;
+}
 
+// ─── All Ego Gifts ──────────────────────────────────────────────────────
 export const egoGifts: EgoGift[] = [
-  // ═══ Eclipse Sovereign (Rover Eclipse) ═══
+  // ═══ Generic Gifts (from your JSON) ══════════════════════════════════
   {
-    id: 'eclipse_crown',
-    name: 'Eclipse Crown',
-    slot: 1,
-    set: 'Eclipse Sovereign',
-    rarity: 'SSR',
-    stats: { hp: 500, atk: 50 },
-    description: 'A crown that dims the light around it. Part of the Eclipse Sovereign set.',
-    icon: '👑',
-    cost: 2500,
-    signatureFor: 'rover_eclipse',
+    id: 'solemn_lament_gift',
+    name: 'Solemn Lament',
+    slot: 'right_back',
+    set: null,
+    rarity: 'HE',
+    stats: { fortitude: 1, prudence: 1, temperance: 2, justice: 2 },
+    description: 'Increases work success rate and speed, and attack weight.',
+    icon: '💀',
+    cost: 800,
+    special: 'Increases work success rate and speed, and attack weight.',
   },
   {
-    id: 'eclipse_mantle',
-    name: 'Eclipse Mantle',
-    slot: 2,
-    set: 'Eclipse Sovereign',
-    rarity: 'SSR',
-    stats: { def: 60, hp: 300 },
-    description: 'A mantle woven from shadow and starlight. Part of the Eclipse Sovereign set.',
-    icon: '🧥',
-    cost: 2500,
-    signatureFor: 'rover_eclipse',
-  },
-  {
-    id: 'eclipse_ring',
-    name: 'Eclipse Ring',
-    slot: 3,
-    set: 'Eclipse Sovereign',
-    rarity: 'SSR',
-    stats: { atk: 70, spd: 8 },
-    description: 'A ring pulsing with eclipsed energy. Part of the Eclipse Sovereign set.',
-    icon: '💍',
-    cost: 2500,
-    signatureFor: 'rover_eclipse',
-  },
-  {
-    id: 'eclipse_sigil_shard',
-    name: 'Sigil Shard',
-    slot: 4,
-    set: 'Eclipse Sovereign',
-    rarity: 'SSR',
-    stats: { atk: 80, hp: 200 },
-    description: 'A fragment of the original Eclipse Sigil. Part of the Eclipse Sovereign set.',
-    icon: '💎',
-    cost: 3000,
-    signatureFor: 'rover_eclipse',
-  },
-
-  // ═══ Abyss Sovereign (Apollyon) ═══
-  {
-    id: 'abyssal_mask',
-    name: 'Abyssal Mask',
-    slot: 1,
-    set: 'Abyss Sovereign',
-    rarity: 'SSR',
-    stats: { hp: 450, def: 40 },
-    description: 'A mask that reveals darkness. Part of the Abyss Sovereign set.',
-    icon: '🎭',
-    cost: 2500,
-    signatureFor: 'apollyon_abyss',
-  },
-  {
-    id: 'abyssal_shroud',
-    name: 'Abyssal Shroud',
-    slot: 2,
-    set: 'Abyss Sovereign',
-    rarity: 'SSR',
-    stats: { def: 70, spd: 5 },
-    description: 'A shroud that drinks in light. Part of the Abyss Sovereign set.',
-    icon: '🖤',
-    cost: 2500,
-    signatureFor: 'apollyon_abyss',
-  },
-  {
-    id: 'abyssal_chains',
-    name: 'Warden Chains',
-    slot: 3,
-    set: 'Abyss Sovereign',
-    rarity: 'SSR',
-    stats: { atk: 60, hp: 350 },
-    description: 'Chains that bound the abyss. Part of the Abyss Sovereign set.',
-    icon: '⛓️',
-    cost: 2500,
-    signatureFor: 'apollyon_abyss',
-  },
-  {
-    id: 'abyssal_heart',
-    name: 'Abyssal Heart',
-    slot: 4,
-    set: 'Abyss Sovereign',
-    rarity: 'SSR',
-    stats: { atk: 85, def: 30 },
-    description: 'Crystallized heart of an abyssal entity. Part of the Abyss Sovereign set.',
-    icon: '🫀',
-    cost: 3000,
-    signatureFor: 'apollyon_abyss',
-  },
-
-  // ═══ Dark Slayer (Verg) ═══
-  {
-    id: 'yamato_sheath',
-    name: 'Yamato Sheath',
-    slot: 1,
-    set: 'Dark Slayer',
-    rarity: 'SSR',
-    stats: { atk: 70, spd: 15 },
-    description: 'The sheath of the legendary blade. Part of the Dark Slayer set.',
-    icon: '🗡️',
-    cost: 2500,
-    signatureFor: 'verg_dark_slayer',
-  },
-  {
-    id: 'dark_coat',
-    name: 'Dark Coat',
-    slot: 2,
-    set: 'Dark Slayer',
-    rarity: 'SSR',
-    stats: { def: 60, hp: 250 },
-    description: 'A coat worn by the Dark Slayer. Part of the Dark Slayer set.',
-    icon: '🧥',
-    cost: 2500,
-    signatureFor: 'verg_dark_slayer',
-  },
-  {
-    id: 'motivation_charm',
-    name: 'Motivation Charm',
-    slot: 3,
-    set: 'Dark Slayer',
-    rarity: 'SSR',
-    stats: { atk: 80, hp: 200 },
-    description: 'A charm that fuels the thirst for power. Part of the Dark Slayer set.',
-    icon: '⚡',
-    cost: 2500,
-    signatureFor: 'verg_dark_slayer',
-  },
-  {
-    id: 'devil_core',
-    name: 'Devil Core',
-    slot: 4,
-    set: 'Dark Slayer',
-    rarity: 'SSR',
-    stats: { atk: 95, spd: 8 },
-    description: 'The crystallized essence of demonic power. Part of the Dark Slayer set.',
-    icon: '💜',
-    cost: 3000,
-    signatureFor: 'verg_dark_slayer',
-  },
-
-  // ═══ Legendary Knight (Sparda) ═══
-  {
-    id: 'sparda_crown',
-    name: 'Dark Crown',
-    slot: 1,
-    set: 'Legendary Knight',
-    rarity: 'SSR',
-    stats: { hp: 600, def: 30 },
-    description: 'The crown of the legendary dark knight. Part of the Legendary Knight set.',
-    icon: '👑',
-    cost: 2500,
-    signatureFor: 'sparda_legendary',
-  },
-  {
-    id: 'sparda_cape',
-    name: 'Knight Cape',
-    slot: 2,
-    set: 'Legendary Knight',
-    rarity: 'SSR',
-    stats: { def: 80, hp: 200 },
-    description: 'A cape that has seen countless battles. Part of the Legendary Knight set.',
-    icon: '🧥',
-    cost: 2500,
-    signatureFor: 'sparda_legendary',
-  },
-  {
-    id: 'sparda_gauntlet',
-    name: 'Knight Gauntlet',
-    slot: 3,
-    set: 'Legendary Knight',
-    rarity: 'SSR',
-    stats: { atk: 70, def: 20 },
-    description: 'Gauntlets of the legendary knight. Part of the Legendary Knight set.',
-    icon: '🧤',
-    cost: 2500,
-    signatureFor: 'sparda_legendary',
-  },
-  {
-    id: 'sparda_soul',
-    name: 'Knight Soul',
-    slot: 4,
-    set: 'Legendary Knight',
-    rarity: 'SSR',
-    stats: { atk: 90, hp: 300 },
-    description: 'The soul of the knight that never yields. Part of the Legendary Knight set.',
-    icon: '👻',
-    cost: 3000,
-    signatureFor: 'sparda_legendary',
-  },
-
-  // ═══ Devil Hunter (Rin) ═══
-  {
-    id: 'rin_jacket',
-    name: 'Red Jacket',
-    slot: 1,
-    set: 'Devil Hunter',
-    rarity: 'SSR',
-    stats: { hp: 400, atk: 50 },
-    description: 'The iconic red jacket of a devil hunter. Part of the Devil Hunter set.',
-    icon: '🧥',
-    cost: 2500,
-    signatureFor: 'rin_devil_hunter',
-  },
-  {
-    id: 'rin_gloves',
-    name: 'Hunter Gloves',
-    slot: 2,
-    set: 'Devil Hunter',
-    rarity: 'SSR',
-    stats: { atk: 65, spd: 10 },
-    description: 'Gloves worn from countless battles. Part of the Devil Hunter set.',
-    icon: '🧤',
-    cost: 2500,
-    signatureFor: 'rin_devil_hunter',
-  },
-  {
-    id: 'rin_amulet',
-    name: 'Amulet of Style',
-    slot: 3,
-    set: 'Devil Hunter',
-    rarity: 'SSR',
-    stats: { atk: 75, spd: 8 },
-    description: 'An amulet that radiates pure style. Part of the Devil Hunter set.',
-    icon: '📿',
-    cost: 2500,
-    signatureFor: 'rin_devil_hunter',
-  },
-  {
-    id: 'rin_devil_core',
-    name: 'Devil Hunter Core',
-    slot: 4,
-    set: 'Devil Hunter',
-    rarity: 'SSR',
-    stats: { atk: 90, hp: 200 },
-    description: 'The core of a true devil hunter. Part of the Devil Hunter set.',
-    icon: '❤️',
-    cost: 3000,
-    signatureFor: 'rin_devil_hunter',
-  },
-
-  // ═══ Funeral (Butterfly) ═══
-  {
-    id: 'butterfly_wings_gift',
-    name: 'Butterfly Wings',
-    slot: 1,
-    set: 'Funeral',
-    rarity: 'SSR',
-    stats: { spd: 20, atk: 40 },
-    description: 'Delicate wings that sing the song of death. Part of the Funeral set.',
-    icon: '🦋',
-    cost: 2500,
-    signatureFor: 'butterfly_funeral',
-  },
-  {
-    id: 'butterfly_cocoon',
-    name: 'Cocoon of Rest',
-    slot: 2,
-    set: 'Funeral',
-    rarity: 'SSR',
-    stats: { def: 50, hp: 300 },
-    description: 'A cocoon where souls find peace. Part of the Funeral set.',
-    icon: '🕸️',
-    cost: 2500,
-    signatureFor: 'butterfly_funeral',
-  },
-  {
-    id: 'butterfly_charm',
-    name: 'Spectral Charm',
-    slot: 3,
-    set: 'Funeral',
-    rarity: 'SSR',
-    stats: { atk: 65, spd: 10 },
-    description: 'A charm that resonates with departed souls. Part of the Funeral set.',
-    icon: '📿',
-    cost: 2500,
-    signatureFor: 'butterfly_funeral',
-  },
-  {
-    id: 'butterfly_soul',
-    name: 'Butterfly Soul',
-    slot: 4,
-    set: 'Funeral',
-    rarity: 'SSR',
-    stats: { atk: 85, spd: 12 },
-    description: 'The soul of a butterfly that chose to stay. Part of the Funeral set.',
-    icon: '💙',
-    cost: 3000,
-    signatureFor: 'butterfly_funeral',
-  },
-
-  // ═══ Conductor (Miastro) ═══
-  {
-    id: 'miastro_baton_gift',
-    name: 'Conductor Baton',
-    slot: 1,
-    set: 'Orchestra',
-    rarity: 'SSR',
-    stats: { atk: 55, spd: 12 },
-    description: 'The baton that leads the symphony. Part of the Orchestra set.',
-    icon: '🎼',
-    cost: 2500,
-    signatureFor: 'miastro_conductor',
-  },
-  {
-    id: 'miastro_suit',
-    name: 'Concert Suit',
-    slot: 2,
-    set: 'Orchestra',
-    rarity: 'SSR',
-    stats: { def: 55, hp: 300 },
-    description: 'An immaculate concert suit. Part of the Orchestra set.',
-    icon: '🤵',
-    cost: 2500,
-    signatureFor: 'miastro_conductor',
-  },
-  {
-    id: 'miastro_score',
-    name: 'War Score',
-    slot: 3,
-    set: 'Orchestra',
-    rarity: 'SSR',
-    stats: { atk: 70, def: 15 },
-    description: 'Sheet music for the symphony of battle. Part of the Orchestra set.',
-    icon: '📜',
-    cost: 2500,
-    signatureFor: 'miastro_conductor',
-  },
-  {
-    id: 'miastro_soul',
-    name: 'Conductor Soul',
-    slot: 4,
-    set: 'Orchestra',
-    rarity: 'SSR',
-    stats: { atk: 85, spd: 8 },
-    description: 'The soul of the eternal conductor. Part of the Orchestra set.',
+    id: 'da_capo',
+    name: 'Da Capo',
+    slot: 'eye',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { temperance: 4 },
+    description: 'When the suit "da_capo" is equipped, absorbs all white damage (converts to healing).',
     icon: '🎵',
     cost: 3000,
-    signatureFor: 'miastro_conductor',
-  },
-
-  // ═══ Shorekeeper (Don Papa) ═══
-  {
-    id: 'don_anchor_gift',
-    name: 'Anchor Charm',
-    slot: 1,
-    set: 'Shorekeeper',
-    rarity: 'SSR',
-    stats: { hp: 550, def: 30 },
-    description: 'A charm shaped like a weathered anchor. Part of the Shorekeeper set.',
-    icon: '⚓',
-    cost: 2500,
-    signatureFor: 'don_papa',
+    special: 'When the suit "da_capo" is equipped, absorbs all white damage (converts to healing).',
   },
   {
-    id: 'don_coat',
-    name: 'Sailor Coat',
-    slot: 2,
-    set: 'Shorekeeper',
-    rarity: 'SSR',
-    stats: { def: 70, hp: 250 },
-    description: 'A coat worn through countless storms. Part of the Shorekeeper set.',
-    icon: '🧥',
-    cost: 2500,
-    signatureFor: 'don_papa',
+    id: 'penitence_gift',
+    name: 'Penitence',
+    slot: 'hat',
+    set: null,
+    rarity: 'ZAYIN',
+    stats: { prudence: 2 },
+    description: 'Success rate increases by 10% when working with the corresponding abnormality.',
+    icon: '🙏',
+    cost: 300,
+    special: 'Success rate increases by 10% when working with the corresponding abnormality.',
   },
   {
-    id: 'don_compass',
-    name: 'Tide Compass',
-    slot: 3,
-    set: 'Shorekeeper',
-    rarity: 'SSR',
-    stats: { atk: 60, spd: 10 },
-    description: 'A compass that always points to the tide. Part of the Shorekeeper set.',
-    icon: '🧭',
-    cost: 2500,
-    signatureFor: 'don_papa',
-  },
-  {
-    id: 'don_heart',
-    name: 'Ocean Heart',
-    slot: 4,
-    set: 'Shorekeeper',
-    rarity: 'SSR',
-    stats: { atk: 80, hp: 350 },
-    description: 'A heart as vast as the ocean. Part of the Shorekeeper set.',
-    icon: '💙',
+    id: 'smile_gift',
+    name: 'Smile',
+    slot: 'eye',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { fortitude: 5, prudence: 5 },
+    description: 'HP +5, SP +5 (approximated as +1 Fortitude and +1 Prudence).',
+    icon: '😊',
     cost: 3000,
-    signatureFor: 'don_papa',
-  },
-
-  // ═══ Threnodia (Aemeath) ═══
-  {
-    id: 'aemeath_veil',
-    name: 'Threnodian Veil',
-    slot: 1,
-    set: 'Threnodia',
-    rarity: 'SSR',
-    stats: { hp: 450, atk: 50 },
-    description: 'A veil that separates life from death. Part of the Threnodia set.',
-    icon: '🪦',
-    cost: 2500,
-    signatureFor: 'aemeath_sentinel',
+    special: 'HP +5, SP +5 (approximated as +1 Fortitude and +1 Prudence).',
   },
   {
-    id: 'aemeath_robe',
-    name: 'Sentinel Robe',
-    slot: 2,
-    set: 'Threnodia',
-    rarity: 'SSR',
-    stats: { def: 60, hp: 300 },
-    description: 'The robe of the Sentinel of Threnodia. Part of the Threnodia set.',
-    icon: '👘',
-    cost: 2500,
-    signatureFor: 'aemeath_sentinel',
-  },
-  {
-    id: 'aemeath_bell',
-    name: 'Funeral Bell',
-    slot: 3,
-    set: 'Threnodia',
-    rarity: 'SSR',
-    stats: { atk: 70, spd: 8 },
-    description: 'A bell that tolls for the departed. Part of the Threnodia set.',
-    icon: '🔔',
-    cost: 2500,
-    signatureFor: 'aemeath_sentinel',
-  },
-  {
-    id: 'aemeath_soul',
-    name: 'Sentinel Soul',
-    slot: 4,
-    set: 'Threnodia',
-    rarity: 'SSR',
-    stats: { atk: 90, def: 20 },
-    description: 'The soul of the eternal sentinel. Part of the Threnodia set.',
-    icon: '💜',
+    id: 'mimicry_gift',
+    name: 'Mimicry',
+    slot: 'cheek',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { fortitude: 1 },
+    description: 'HP +10 and increases all HP healing received by 5%.',
+    icon: '🎭',
     cost: 3000,
-    signatureFor: 'aemeath_sentinel',
-  },
-
-  // ═══ Eternal Tide (Shorekeeper) ═══
-  {
-    id: 'tide_crown',
-    name: 'Tide Crown',
-    slot: 1,
-    set: 'Eternal Tide',
-    rarity: 'SSR',
-    stats: { hp: 400, atk: 55 },
-    description: 'A crown formed from ocean foam. Part of the Eternal Tide set.',
-    icon: '👑',
-    cost: 2500,
-    signatureFor: 'shorekeeper_tide',
+    special: 'HP +10 and increases all HP healing received by 5%.',
   },
   {
-    id: 'tide_robe',
-    name: 'Tide Robe',
-    slot: 2,
-    set: 'Eternal Tide',
-    rarity: 'SSR',
-    stats: { def: 55, spd: 10 },
-    description: 'A robe woven from ocean currents. Part of the Eternal Tide set.',
-    icon: '👘',
-    cost: 2500,
-    signatureFor: 'shorekeeper_tide',
+    id: 'twilight_gift',
+    name: 'Twilight',
+    slot: 'right_back',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { fortitude: 7, prudence: 7, temperance: 7, justice: 7 },
+    description: 'HP +7; SP +7; Success Rate +7; Work Speed +7; Attack Weight +7; Coin Power +7',
+    icon: '🌅',
+    cost: 3500,
+    special: 'HP +7; SP +7; Success Rate +7; Work Speed +7; Attack Weight +7; Coin Power +7',
   },
   {
-    id: 'tide_pearl',
-    name: 'Ocean Pearl',
-    slot: 3,
-    set: 'Eternal Tide',
-    rarity: 'SSR',
-    stats: { atk: 65, hp: 250 },
-    description: 'A pearl that contains the ocean\'s blessing. Part of the Eternal Tide set.',
-    icon: '🫧',
-    cost: 2500,
-    signatureFor: 'shorekeeper_tide',
-  },
-  {
-    id: 'tide_heart',
-    name: 'Tide Heart',
-    slot: 4,
-    set: 'Eternal Tide',
-    rarity: 'SSR',
-    stats: { atk: 85, spd: 8 },
-    description: 'The heart of the eternal tide. Part of the Eternal Tide set.',
-    icon: '🌊',
-    cost: 3000,
-    signatureFor: 'shorekeeper_tide',
-  },
-
-  // ═══ Chaos Sovereign (Xenon) ═══
-  {
-    id: 'chaos_crown',
-    name: 'Chaos Crown',
-    slot: 1,
-    set: 'Chaos Sovereign',
-    rarity: 'SSR',
-    stats: { hp: 500, atk: 60 },
-    description: 'A crown of swirling chaos. Part of the Chaos Sovereign set.',
-    icon: '👑',
-    cost: 2500,
-    signatureFor: 'xenon_chaos',
-  },
-  {
-    id: 'chaos_mantle',
-    name: 'Chaos Mantle',
-    slot: 2,
-    set: 'Chaos Sovereign',
-    rarity: 'SSR',
-    stats: { def: 70, hp: 300 },
-    description: 'A mantle woven from entropy. Part of the Chaos Sovereign set.',
-    icon: '🧥',
-    cost: 2500,
-    signatureFor: 'xenon_chaos',
-  },
-  {
-    id: 'chaos_ring',
-    name: 'Chaos Ring',
-    slot: 3,
-    set: 'Chaos Sovereign',
-    rarity: 'SSR',
-    stats: { atk: 80, spd: 10 },
-    description: 'A ring that warps reality. Part of the Chaos Sovereign set.',
-    icon: '💍',
-    cost: 2500,
-    signatureFor: 'xenon_chaos',
-  },
-  {
-    id: 'chaos_heart',
-    name: 'Chaos Heart',
-    slot: 4,
-    set: 'Chaos Sovereign',
-    rarity: 'SSR',
-    stats: { atk: 90, hp: 200 },
-    description: 'The crystallized heart of chaos. Part of the Chaos Sovereign set.',
-    icon: '💜',
-    cost: 3000,
-    signatureFor: 'xenon_chaos',
-  },
-
-  // ─── NEW: Warden's Judgment (Doran) ───
-  {
-    id: 'doran_crown',
-    name: 'Warden Crown',
-    slot: 1,
-    set: 'Warden\'s Judgment',
-    rarity: 'SSR',
-    stats: { hp: 500, atk: 50 },
-    description: 'A crown that bears the weight of judgment. Part of the Warden\'s Judgment set.',
-    icon: '👑',
-    cost: 2500,
-    signatureFor: 'doran_warden',
-  },
-  {
-    id: 'doran_mantle',
-    name: 'Warden Mantle',
-    slot: 2,
-    set: 'Warden\'s Judgment',
-    rarity: 'SSR',
-    stats: { def: 60, hp: 300 },
-    description: 'A mantle woven from rust and resolve. Part of the Warden\'s Judgment set.',
-    icon: '🧥',
-    cost: 2500,
-    signatureFor: 'doran_warden',
-  },
-  {
-    id: 'doran_ring',
-    name: 'Warden Ring',
-    slot: 3,
-    set: 'Warden\'s Judgment',
-    rarity: 'SSR',
-    stats: { atk: 70, spd: 8 },
-    description: 'A ring that pulses with the weight of old judgments. Part of the Warden\'s Judgment set.',
-    icon: '💍',
-    cost: 2500,
-    signatureFor: 'doran_warden',
-  },
-  {
-    id: 'doran_sigil',
-    name: 'Warden Sigil',
-    slot: 4,
-    set: 'Warden\'s Judgment',
-    rarity: 'SSR',
-    stats: { atk: 80, hp: 200 },
-    description: 'A sigil that holds the memories of every sentence passed. Part of the Warden\'s Judgment set.',
-    icon: '💎',
-    cost: 3000,
-    signatureFor: 'doran_warden',
-  },
-
-  // ─── NEW: Oath of Faith (Gwendolyn) ───
-  {
-    id: 'gwendolyn_crown',
-    name: 'Faith Crown',
-    slot: 1,
-    set: 'Oath of Faith',
-    rarity: 'SSR',
-    stats: { hp: 600, def: 30 },
-    description: 'A crown that bears the weight of a broken oath. Part of the Oath of Faith set.',
-    icon: '👑',
-    cost: 2500,
-    signatureFor: 'gwendolyn_anvil',
-  },
-  {
-    id: 'gwendolyn_armor',
-    name: 'Faith Armor',
-    slot: 2,
-    set: 'Oath of Faith',
-    rarity: 'SSR',
-    stats: { def: 80, hp: 200 },
-    description: 'Armor that has been reforged from shattered faith. Part of the Oath of Faith set.',
-    icon: '🛡️',
-    cost: 2500,
-    signatureFor: 'gwendolyn_anvil',
-  },
-  {
-    id: 'gwendolyn_gauntlet',
-    name: 'Faith Gauntlet',
-    slot: 3,
-    set: 'Oath of Faith',
-    rarity: 'SSR',
-    stats: { atk: 60, def: 20 },
-    description: 'Gauntlets that have held both sword and shield. Part of the Oath of Faith set.',
-    icon: '🧤',
-    cost: 2500,
-    signatureFor: 'gwendolyn_anvil',
-  },
-  {
-    id: 'gwendolyn_soul',
-    name: 'Faith Soul',
-    slot: 4,
-    set: 'Oath of Faith',
-    rarity: 'SSR',
-    stats: { atk: 70, hp: 300 },
-    description: 'The soul of a knight who chose mercy over order. Part of the Oath of Faith set.',
-    icon: '💛',
-    cost: 3000,
-    signatureFor: 'gwendolyn_anvil',
-  },
-
-  // ─── NEW: Shepherd's Lament (Mira) ───
-  {
-    id: 'mira_crown',
-    name: 'Shepherd Crown',
-    slot: 1,
-    set: 'Shepherd\'s Lament',
-    rarity: 'SSR',
-    stats: { hp: 450, atk: 40 },
-    description: 'A crown of bellflowers that weeps with the rain. Part of the Shepherd\'s Lament set.',
-    icon: '👑',
-    cost: 2500,
-    signatureFor: 'mira_shepherd',
-  },
-  {
-    id: 'mira_robe',
-    name: 'Shepherd Robe',
-    slot: 2,
-    set: 'Shepherd\'s Lament',
-    rarity: 'SSR',
-    stats: { def: 55, hp: 300 },
-    description: 'A robe woven from the silence of a mother’s grief. Part of the Shepherd\'s Lament set.',
-    icon: '👘',
-    cost: 2500,
-    signatureFor: 'mira_shepherd',
-  },
-  {
-    id: 'mira_bell',
-    name: 'Shepherd Bell',
-    slot: 3,
-    set: 'Shepherd\'s Lament',
-    rarity: 'SSR',
-    stats: { atk: 60, spd: 10 },
-    description: 'A bell that sings sorrow into hope. Part of the Shepherd\'s Lament set.',
-    icon: '🔔',
-    cost: 2500,
-    signatureFor: 'mira_shepherd',
-  },
-  {
-    id: 'mira_soul',
-    name: 'Shepherd Soul',
-    slot: 4,
-    set: 'Shepherd\'s Lament',
-    rarity: 'SSR',
-    stats: { atk: 75, hp: 250 },
-    description: 'The soul of a mother who learned to sing again. Part of the Shepherd\'s Lament set.',
-    icon: '💜',
-    cost: 3000,
-    signatureFor: 'mira_shepherd',
-  },
-
-  // ═══════════════════════════════════════════════════════
-  // SR 2-PIECE SETS (Slots 5-6)
-  // ═══════════════════════════════════════════════════════
-
-  // Vitality Set (HP focus)
-  {
-    id: 'vitality_charm',
-    name: 'Vitality Charm',
-    slot: 5,
-    set: 'Vitality',
-    rarity: 'SR',
-    stats: { hp: 800 },
-    description: 'A charm that bolsters vitality. Part of the Vitality set.',
-    icon: '💪',
-    cost: 800,
-  },
-  {
-    id: 'vitality_seal',
-    name: 'Vitality Seal',
-    slot: 6,
-    set: 'Vitality',
-    rarity: 'SR',
-    stats: { hp: 600, def: 30 },
-    description: 'A seal of life that reinforces the body. Part of the Vitality set.',
-    icon: '❤️',
-    cost: 800,
-  },
-
-  // Aggression Set (ATK focus)
-  {
-    id: 'attack_talisman',
-    name: 'Attack Talisman',
-    slot: 5,
-    set: 'Aggression',
-    rarity: 'SR',
-    stats: { atk: 100 },
-    description: 'Enhances offensive power. Part of the Aggression set.',
-    icon: '⚡',
-    cost: 800,
-  },
-  {
-    id: 'rage_token',
-    name: 'Rage Token',
-    slot: 6,
-    set: 'Aggression',
-    rarity: 'SR',
-    stats: { atk: 75, spd: 10 },
-    description: 'Burns with battle fury. Part of the Aggression set.',
-    icon: '🔥',
-    cost: 800,
-  },
-
-  // Bulwark Set (DEF focus)
-  {
-    id: 'guardian_plate',
-    name: 'Guardian Plate',
-    slot: 5,
-    set: 'Bulwark',
-    rarity: 'SR',
-    stats: { def: 80, hp: 300 },
-    description: 'A protective plate. Part of the Bulwark set.',
-    icon: '🛡️',
-    cost: 800,
-  },
-  {
-    id: 'warding_totem',
-    name: 'Warding Totem',
-    slot: 6,
-    set: 'Bulwark',
-    rarity: 'SR',
-    stats: { def: 60, hp: 500 },
-    description: 'A totem blessed by ancients. Part of the Bulwark set.',
-    icon: '🗿',
-    cost: 800,
-  },
-
-  // Swiftness Set (SPD focus)
-  {
-    id: 'speed_feather',
-    name: 'Speed Feather',
-    slot: 5,
-    set: 'Swiftness',
-    rarity: 'SR',
-    stats: { spd: 20, atk: 50 },
-    description: 'A feather light as wind. Part of the Swiftness set.',
-    icon: '🪶',
-    cost: 800,
-  },
-  {
-    id: 'wind_anklet',
-    name: 'Wind Anklet',
-    slot: 6,
-    set: 'Swiftness',
-    rarity: 'SR',
-    stats: { spd: 18, atk: 40 },
-    description: 'An anklet that grants the speed of the gale. Part of the Swiftness set.',
-    icon: '💨',
-    cost: 800,
-  },
-
-  // Entropy Set (Chaos focus)
-  {
-    id: 'entropy_charm',
-    name: 'Entropy Charm',
-    slot: 5,
-    set: 'Entropy',
-    rarity: 'SR',
-    stats: { atk: 80, hp: 300 },
-    description: 'Charm of ever-increasing disorder. Part of the Entropy set.',
-    icon: '🌀',
-    cost: 800,
-  },
-  {
-    id: 'entropy_seal',
-    name: 'Entropy Seal',
-    slot: 6,
-    set: 'Entropy',
-    rarity: 'SR',
-    stats: { atk: 60, def: 30 },
-    description: 'Seal of chaotic energy. Part of the Entropy set.',
-    icon: '⚡',
-    cost: 800,
-  },
-
-  // ═══════════════════════════════════════════════════════
-  // SSR 2-PIECE SETS (Slots 5-6)
-  // ═══════════════════════════════════════════════════════
-
-  // Eclipse Echo Set (premium HP+ATK)
-  {
-    id: 'eclipse_echo_charm',
-    name: 'Eclipse Echo Charm',
-    slot: 5,
-    set: 'Eclipse Echo',
-    rarity: 'SSR',
-    stats: { hp: 1200, atk: 80 },
-    description: 'A charm resonating with the eclipse. Part of the Eclipse Echo set.',
-    icon: '🌑',
-    cost: 2000,
-  },
-  {
-    id: 'eclipse_echo_seal',
-    name: 'Eclipse Echo Seal',
-    slot: 6,
-    set: 'Eclipse Echo',
-    rarity: 'SSR',
-    stats: { hp: 900, atk: 60, def: 40 },
-    description: 'A seal of eclipsed power. Part of the Eclipse Echo set.',
-    icon: '🌒',
-    cost: 2000,
-  },
-
-  // Devil Pact Set (Crit/ATK focus)
-  {
-    id: 'devil_pact_amulet',
-    name: 'Devil Pact Amulet',
-    slot: 5,
-    set: 'Devil Pact',
-    rarity: 'SSR',
-    stats: { atk: 150, spd: 15 },
-    description: 'A pact with demonic powers. Part of the Devil Pact set.',
-    icon: '😈',
-    cost: 2000,
-  },
-  {
-    id: 'devil_pact_ring',
-    name: 'Devil Pact Ring',
-    slot: 6,
-    set: 'Devil Pact',
-    rarity: 'SSR',
-    stats: { atk: 130, spd: 12, hp: 300 },
-    description: 'A ring sealed with demonic might. Part of the Devil Pact set.',
-    icon: '💍',
-    cost: 2000,
-  },
-
-  // Stellar Veil Set (Support/Healing focus)
-  {
-    id: 'stellar_veil_orb',
-    name: 'Stellar Veil Orb',
-    slot: 5,
-    set: 'Stellar Veil',
-    rarity: 'SSR',
-    stats: { hp: 800, def: 70 },
-    description: 'An orb that channels starlight. Part of the Stellar Veil set.',
-    icon: '⭐',
-    cost: 2000,
-  },
-  {
-    id: 'stellar_veil_pendant',
-    name: 'Stellar Veil Pendant',
-    slot: 6,
-    set: 'Stellar Veil',
-    rarity: 'SSR',
-    stats: { hp: 600, def: 60, spd: 10 },
-    description: 'A pendant of cosmic protection. Part of the Stellar Veil set.',
-    icon: '🌟',
-    cost: 2000,
-  },
-
-  // Voidborne Set (ATK/SPD focus)
-  {
-    id: 'voidborne_orb',
-    name: 'Voidborne Orb',
-    slot: 5,
-    set: 'Voidborne',
-    rarity: 'SSR',
-    stats: { atk: 120, hp: 500 },
-    description: 'Orb of the void. Part of the Voidborne set.',
-    icon: '🪐',
-    cost: 2000,
-  },
-  {
-    id: 'voidborne_pendant',
-    name: 'Voidborne Pendant',
-    slot: 6,
-    set: 'Voidborne',
-    rarity: 'SSR',
-    stats: { atk: 100, def: 40 },
-    description: 'Pendant of void resonance. Part of the Voidborne set.',
+    id: 'our_galaxy_gift',
+    name: 'Our Galaxy',
+    slot: 'neck',
+    set: null,
+    rarity: 'HE',
+    stats: { fortitude: 2, temperance: 2 },
+    description: 'Success Rate +3, Work Speed +3. Heals a small amount of HP at short intervals.',
     icon: '🌌',
-    cost: 2000,
-  },
-
-  // ── NEW: Element Corrosion set ──
-  {
-    id: 'corrosion_charm',
-    name: 'Corrosion Charm',
-    slot: 5,
-    set: 'Corrosion',
-    rarity: 'SSR',
-    stats: { atk: 90, hp: 400 },
-    description: 'Charm of elemental decay. Part of the Corrosion set.',
-    icon: '☣️',
-    cost: 2000,
+    cost: 800,
+    special: 'Success Rate +3, Work Speed +3. Heals a small amount of HP at short intervals.',
   },
   {
-    id: 'corrosion_seal',
-    name: 'Corrosion Seal',
-    slot: 6,
-    set: 'Corrosion',
-    rarity: 'SSR',
-    stats: { atk: 70, def: 50 },
-    description: 'Seal of corrosive force. Part of the Corrosion set.',
-    icon: '⚗️',
-    cost: 2000,
-  },
-
-  // ═══════════════════════════════════════════════════════
-  // NEW: Class-specific SSR 2-PIECE BUFF SETS (Slots 5-6)
-  // ═══════════════════════════════════════════════════════
-
-  // ── Attacker's Edge ──
-  {
-    id: 'attackers_edge_orb',
-    name: 'Edge Orb',
-    slot: 5,
-    set: 'Attacker\'s Edge',
-    rarity: 'SSR',
-    stats: { atk: 140, crit: 5 }, // crit rate not displayed but set effect handles it
-    description: 'A sharp-edged orb that hones the killer instinct. Part of the Attacker\'s Edge set.',
-    icon: '🗡️',
-    cost: 2000,
+    id: 'paradise_lost_gift',
+    name: 'Paradise Lost',
+    slot: 'left_back',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { fortitude: 10, prudence: 10, temperance: 10, justice: 10 },
+    description: 'HP +10; SP +10; Coin Power +10; Attack Weight +10',
+    icon: '😇',
+    cost: 4000,
+    special: 'HP +10; SP +10; Coin Power +10; Attack Weight +10',
   },
   {
-    id: 'attackers_edge_ring',
-    name: 'Edge Ring',
-    slot: 6,
-    set: 'Attacker\'s Edge',
-    rarity: 'SSR',
-    stats: { atk: 110, spd: 12 },
-    description: 'A ring that marks the wielder as a true attacker. Part of the Attacker\'s Edge set.',
-    icon: '💍',
+    id: 'gold_rush_gift',
+    name: 'Gold Rush',
+    slot: 'hand1',
+    set: null,
+    rarity: 'WAW',
+    stats: { fortitude: 6 },
+    description: 'HP +6. Instinct work success rate increased by 6%.',
+    icon: '💰',
     cost: 2000,
-  },
-
-  // ── Tank's Bastion ──
-  {
-    id: 'tanks_bastion_shield',
-    name: 'Bastion Shield',
-    slot: 5,
-    set: 'Tank\'s Bastion',
-    rarity: 'SSR',
-    stats: { def: 150, hp: 500 },
-    description: 'A shield that has weathered a thousand sieges. Part of the Tank\'s Bastion set.',
-    icon: '🛡️',
-    cost: 2000,
+    special: 'HP +6. Instinct work success rate increased by 6%.',
   },
   {
-    id: 'tanks_bastion_plate',
-    name: 'Bastion Plate',
-    slot: 6,
-    set: 'Tank\'s Bastion',
-    rarity: 'SSR',
-    stats: { def: 120, hp: 400 },
-    description: 'Unbreakable plate armour. Part of the Tank\'s Bastion set.',
+    id: 'wrist_cutter_gift',
+    name: 'Wrist Cutter',
+    slot: 'hand2',
+    set: null,
+    rarity: 'TETH',
+    stats: { temperance: 4 },
+    description: 'Success rate +2% (each temperance point gives 0.5% success).',
+    icon: '🔪',
+    cost: 500,
+    special: 'Success rate +2% (each temperance point gives 0.5% success).',
+  },
+  {
+    id: 'lamp_gift',
+    name: 'Lamp',
+    slot: 'helmet',
+    set: null,
+    rarity: 'WAW',
+    stats: { fortitude: 3, temperance: 6 },
+    description: 'HP +3, Success Rate +3%.',
+    icon: '🪔',
+    cost: 2000,
+    special: 'HP +3, Success Rate +3%.',
+  },
+  {
+    id: 'magic_bullet_gift',
+    name: 'Magic Bullet',
+    slot: 'mouth2',
+    set: null,
+    rarity: 'HE',
+    stats: { justice: 10 },
+    description: 'Justice +10.',
+    icon: '🔫',
+    cost: 800,
+    special: 'Justice +10.',
+  },
+  {
+    id: 'kod_gift',
+    name: 'The Sword Sharpened with Tears',
+    slot: 'cheek',
+    set: null,
+    rarity: 'WAW',
+    stats: { justice: 4 },
+    description: 'SP +2, Justice +4 (SP bonus not reflected in stats).',
     icon: '⚔️',
     cost: 2000,
+    special: 'SP +2, Justice +4 (SP bonus not reflected in stats).',
+  },
+  {
+    id: 'midsummer_gift',
+    name: 'Midsummer',
+    slot: 'waist',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { justice: 16 },
+    description: 'Justice +16 (increases attack weight and coin power).',
+    icon: '🌺',
+    cost: 3500,
+    special: 'Justice +16 (increases attack weight and coin power).',
+  },
+  {
+    id: 'hatred_gift',
+    name: 'In the name of love and hate',
+    slot: 'hat',
+    set: null,
+    rarity: 'WAW',
+    stats: { temperance: 2, justice: 4 },
+    description: 'Increases Temperance and Justice, boosting work success and damage.',
+    icon: '❤️‍🔥',
+    cost: 2000,
+    special: 'Increases Temperance and Justice, boosting work success and damage.',
+  },
+  {
+    id: 'justitia_gift',
+    name: 'Justitia',
+    slot: 'eye',
+    set: null,
+    rarity: 'WAW',
+    stats: { justice: 6 },
+    description: 'Justice +6 – improves coin power and attack weight.',
+    icon: '⚖️',
+    cost: 2000,
+    special: 'Justice +6 – improves coin power and attack weight.',
+  },
+  {
+    id: 'regret_gift',
+    name: 'Regret',
+    slot: 'mouth',
+    set: null,
+    rarity: 'TETH',
+    stats: { fortitude: 2, prudence: 2 },
+    description: 'Fortitude +2, Prudence +2 – boosts HP and SP.',
+    icon: '😔',
+    cost: 500,
+    special: 'Fortitude +2, Prudence +2 – boosts HP and SP.',
+  },
+  {
+    id: 'beak_gift',
+    name: 'Beak',
+    slot: 'neck',
+    set: null,
+    rarity: 'TETH',
+    stats: { justice: 2 },
+    description: 'Justice +2 – improves coin power.',
+    icon: '🐦',
+    cost: 500,
+    special: 'Justice +2 – improves coin power.',
+  },
+  {
+    id: 'adoration_gift',
+    name: 'Adoration',
+    slot: 'helmet',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { fortitude: 5, prudence: 10 },
+    description: 'Fortitude +5, Prudence +10 – significantly boosts HP and SP.',
+    icon: '✨',
+    cost: 3000,
+    special: 'Fortitude +5, Prudence +10 – significantly boosts HP and SP.',
+  },
+  {
+    id: 'sound_of_a_star_gift',
+    name: 'Sound of a Star',
+    slot: 'eye',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { justice: 11 },
+    description: 'Justice +11 – dramatically increases coin power and attack weight.',
+    icon: '⭐',
+    cost: 3500,
+    special: 'Justice +11 – dramatically increases coin power and attack weight.',
+  },
+  {
+    id: 'dead_silence',
+    name: 'Dead Silence',
+    slot: 'neck',
+    set: null,
+    rarity: 'WAW',
+    stats: { prudence: 3 },
+    description: 'Increases SP by 3. When dealing damage, has a 10% chance to reduce the target\'s SP by 5.',
+    icon: '🤫',
+    cost: 2000,
+    special: 'Increases SP by 3. When dealing damage, has a 10% chance to reduce the target\'s SP by 5.',
+  },
+  {
+    id: 'faint_aroma_gift',
+    name: 'Faint Aroma',
+    slot: 'face',
+    set: null,
+    rarity: 'WAW',
+    stats: { temperance: 2, prudence: 4 },
+    description: 'Increases Temperance (attachment work success) by 2 and Prudence (SP) by 4.',
+    icon: '🌸',
+    cost: 2000,
+    special: 'Increases Temperance (attachment work success) by 2 and Prudence (SP) by 4.',
+  },
+  {
+    id: 'hornet_gift',
+    name: 'Hornet',
+    slot: 'helmet',
+    set: null,
+    rarity: 'WAW',
+    stats: { fortitude: 2, prudence: 4 },
+    description: 'HP +2, SP +4. Increases work success slightly.',
+    icon: '🐝',
+    cost: 2000,
+    special: 'HP +2, SP +4. Increases work success slightly.',
+  },
+  {
+    id: 'red_eyes_gift',
+    name: 'Red Eyes',
+    slot: 'eye',
+    set: null,
+    rarity: 'TETH',
+    stats: { temperance: 3 },
+    description: 'Increases Temperance (attachment work success) by 3.',
+    icon: '👁️',
+    cost: 500,
+    special: 'Increases Temperance (attachment work success) by 3.',
+  },
+  {
+    id: 'harmony_gift',
+    name: 'Harmony',
+    slot: 'cheek',
+    set: null,
+    rarity: 'HE',
+    stats: { fortitude: 8 },
+    description: 'Increases HP by 8.',
+    icon: '☯️',
+    cost: 800,
+    special: 'Increases HP by 8.',
+  },
+  {
+    id: 'false_throne_gift',
+    name: 'False Throne',
+    slot: 'torso',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { fortitude: 9, prudence: 9, temperance: 9, justice: 9 },
+    description: 'Increases all base stats by 9, greatly enhancing HP, SP, work success, and damage output.',
+    icon: '👑',
+    cost: 4000,
+    special: 'Increases all base stats by 9, greatly enhancing HP, SP, work success, and damage output.',
+  },
+  {
+    id: 'dipsia_gift',
+    name: 'Dipsia',
+    slot: 'hat',
+    set: null,
+    rarity: 'WAW',
+    stats: { justice: 8 },
+    description: 'Increases Justice by 8, improving attack weight and coin power.',
+    icon: '🍷',
+    cost: 2000,
+    special: 'Increases Justice by 8, improving attack weight and coin power.',
+  },
+  {
+    id: 'censored_gift',
+    name: '[CENSORED]',
+    slot: 'eye',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { prudence: 15 },
+    description: 'Increases SP by 15. Grants resistance to mental attacks.',
+    icon: '❓',
+    cost: 3500,
+    special: 'Increases SP by 15. Grants resistance to mental attacks.',
+  },
+  {
+    id: 'cobalt_scar_gift',
+    name: 'Cobalt Scar',
+    slot: 'face',
+    set: null,
+    rarity: 'WAW',
+    stats: { fortitude: 4, justice: 2 },
+    description: 'Fortitude +4, Justice +2 – boosts HP and attack power.',
+    icon: '💙',
+    cost: 2000,
+    special: 'Fortitude +4, Justice +2 – boosts HP and attack power.',
+  },
+  {
+    id: 'crimson_scar_gift',
+    name: 'Crimson Scar',
+    slot: 'mouth',
+    set: null,
+    rarity: 'WAW',
+    stats: { fortitude: 3, justice: 3 },
+    description: 'Fortitude +3, Justice +3 – increases HP and attack power.',
+    icon: '❤️',
+    cost: 2000,
+    special: 'Fortitude +3, Justice +3 – increases HP and attack power.',
+  },
+  {
+    id: 'contempt_awe_gift',
+    name: 'Awe',
+    slot: 'hat',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { fortitude: 8, prudence: 5, temperance: 7, justice: 4 },
+    description: 'Fortitude +8, Prudence +5, Temperance +7, Justice +4 – balanced stat boost.',
+    icon: '🌀',
+    cost: 3500,
+    special: 'Fortitude +8, Prudence +5, Temperance +7, Justice +4 – balanced stat boost.',
+  },
+  {
+    id: 'laetitia_gift',
+    name: 'Laetitia',
+    slot: 'helmet',
+    set: null,
+    rarity: 'HE',
+    stats: { prudence: 4 },
+    description: 'Increases SP by 4 – boosts SP.',
+    icon: '🌈',
+    cost: 800,
+    special: 'Increases SP by 4 – boosts SP.',
+  },
+  {
+    id: 'pink_gift',
+    name: 'Pink',
+    slot: 'helmet',
+    set: null,
+    rarity: 'ALEPH',
+    stats: { justice: 10 },
+    description: 'Justice +10 – Increases the damage of this Abnormality\'s weapon by 15% when the corresponding Abnormality\'s armor is equipped.',
+    icon: '🩷',
+    cost: 3000,
+    special: 'Justice +10 – Increases the damage of this Abnormality\'s weapon by 15% when the corresponding Abnormality\'s armor is equipped.',
+  },
+  {
+    id: 'logging_gift',
+    name: 'Logging',
+    slot: 'torso',
+    set: null,
+    rarity: 'HE',
+    stats: { fortitude: 2, temperance: 4 },
+    description: 'HP +2, Success Rate +2, Work Speed +2 – Increases HP, Work Success Rate and Work Speed by 2.',
+    icon: '🪵',
+    cost: 800,
+    special: 'HP +2, Success Rate +2, Work Speed +2 – Increases HP, Work Success Rate and Work Speed by 2.',
+  },
+  {
+    id: 'harvest_gift',
+    name: 'Harvest',
+    slot: 'neck',
+    set: null,
+    rarity: 'HE',
+    stats: { prudence: 4 },
+    description: 'SP +4 – Increases SP by 4.',
+    icon: '🌾',
+    cost: 800,
+    special: 'SP +4 – Increases SP by 4.',
+  },
+  {
+    id: 'soda_gift',
+    name: 'Soda',
+    slot: 'mouth2',
+    set: null,
+    rarity: 'ZAYIN',
+    stats: { fortitude: 2 },
+    description: 'HP +4 – Increases HP by 2.',
+    icon: '🥤',
+    cost: 300,
+    special: 'HP +4 – Increases HP by 2.',
+  },
+  {
+    id: 'hypocrisy_gift',
+    name: 'Hypocrisy',
+    slot: 'helmet',
+    set: null,
+    rarity: 'WAW',
+    stats: { fortitude: 3, prudence: 3 },
+    description: 'HP +3, SP +3 – Increases HP and SP by 3.',
+    icon: '🎭',
+    cost: 2000,
+    special: 'HP +3, SP +3 – Increases HP and SP by 3.',
+  },
+  {
+    id: 'frag_from_somewhere_gift',
+    name: 'Fragments from Somewhere',
+    slot: 'torso',
+    set: null,
+    rarity: 'TETH',
+    stats: { temperance: 4 },
+    description: 'Work Success Rate +2, Work Speed +2 – Increases Work Success Rate and Work Speed by 2.',
+    icon: '🧩',
+    cost: 500,
+    special: 'Work Success Rate +2, Work Speed +2 – Increases Work Success Rate and Work Speed by 2.',
   },
 
-  // ── Amplifier's Resonance ──
+  // ═══ ARTHUR – Excalibur Sovereign (12 pieces) ═══════════════════════
   {
-    id: 'amplifiers_resonance_gem',
-    name: 'Resonance Gem',
-    slot: 5,
-    set: 'Amplifier\'s Resonance',
+    id: 'excalibur_crown',
+    name: 'Excalibur Crown',
+    slot: 'hat',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { hp: 500, atk: 60 },
+    description: 'A crown that bears the weight of a king\'s resolve. Part of the Excalibur Sovereign set.',
+    icon: '👑',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_mask',
+    name: 'Excalibur Mask',
+    slot: 'face',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { def: 55, hp: 350 },
+    description: 'A mask of pale resolve that hides the king\'s doubt. Part of the Excalibur Sovereign set.',
+    icon: '🎭',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_eye',
+    name: 'Excalibur Eye',
+    slot: 'eye',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { atk: 80, spd: 10 },
+    description: 'An eye that sees the path of kings. Part of the Excalibur Sovereign set.',
+    icon: '👁️',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_mantle',
+    name: 'Excalibur Mantle',
+    slot: 'neck',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { def: 60, hp: 350 },
+    description: 'A mantle woven from pale light and determination. Part of the Excalibur Sovereign set.',
+    icon: '🧥',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_armor',
+    name: 'Excalibur Armor',
+    slot: 'torso',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { hp: 450, def: 50 },
+    description: 'Armor forged from the light of a thousand promises. Part of the Excalibur Sovereign set.',
+    icon: '🛡️',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_sigil',
+    name: 'Excalibur Sigil',
+    slot: 'waist',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { atk: 90, hp: 250 },
+    description: 'The sigil of the one true king. Part of the Excalibur Sovereign set.',
+    icon: '⚔️',
+    cost: 3000,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_ring',
+    name: 'Excalibur Ring',
+    slot: 'hand1',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { atk: 75, spd: 8 },
+    description: 'A ring that pulses with the king\'s will. Part of the Excalibur Sovereign set.',
+    icon: '💍',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_gauntlet',
+    name: 'Excalibur Gauntlet',
+    slot: 'hand2',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { atk: 70, def: 30 },
+    description: 'The gauntlet that wields Excalibur. Part of the Excalibur Sovereign set.',
+    icon: '🧤',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_cheek',
+    name: 'Excalibur Cheek',
+    slot: 'cheek',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { hp: 300, def: 40 },
+    description: 'A cheek marking that shines with pale light. Part of the Excalibur Sovereign set.',
+    icon: '✨',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_mouth',
+    name: 'Excalibur Mouth',
+    slot: 'mouth',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { atk: 65, spd: 12 },
+    description: 'A mouthpiece that speaks the king\'s truth. Part of the Excalibur Sovereign set.',
+    icon: '🗣️',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_back_left',
+    name: 'Excalibur Left Wing',
+    slot: 'left_back',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { hp: 400, spd: 5 },
+    description: 'A left wing of pale light. Part of the Excalibur Sovereign set.',
+    icon: '🪽',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+  {
+    id: 'excalibur_back_right',
+    name: 'Excalibur Right Wing',
+    slot: 'right_back',
+    set: 'Excalibur Sovereign',
+    rarity: 'SSR',
+    stats: { atk: 85, spd: 5 },
+    description: 'A right wing of pale light. Part of the Excalibur Sovereign set.',
+    icon: '🪽',
+    cost: 2500,
+    signatureFor: 'arthur_excalibur',
+  },
+
+  // ═══ CLASS-SPECIFIC BUFF GIFTS (armband slot) ═══════════════════════
+  {
+    id: 'attackers_edge_armband',
+    name: 'Edge Armband',
+    slot: 'armband',
+    set: "Attacker's Edge",
+    rarity: 'SSR',
+    stats: { atk: 140, spd: 12 },
+    description: 'An armband that hones the killer instinct. For Attackers only.',
+    icon: '🗡️',
+    cost: 2000,
+    classRequirement: 'Attacker',
+  },
+  {
+    id: 'tanks_bastion_armband',
+    name: 'Bastion Armband',
+    slot: 'armband',
+    set: "Tank's Bastion",
+    rarity: 'SSR',
+    stats: { def: 150, hp: 500 },
+    description: 'An armband that has weathered a thousand sieges. For Tanks only.',
+    icon: '🛡️',
+    cost: 2000,
+    classRequirement: 'Tank',
+  },
+  {
+    id: 'amplifiers_resonance_armband',
+    name: 'Resonance Armband',
+    slot: 'armband',
+    set: "Amplifier's Resonance",
     rarity: 'SSR',
     stats: { atk: 100, hp: 400 },
-    description: 'A gem that amplifies elemental resonance. Part of the Amplifier\'s Resonance set.',
+    description: 'An armband that amplifies elemental resonance. For Amplifiers only.',
     icon: '💎',
     cost: 2000,
+    classRequirement: 'Amplifier',
   },
   {
-    id: 'amplifiers_resonance_orb',
-    name: 'Resonance Orb',
-    slot: 6,
-    set: 'Amplifier\'s Resonance',
-    rarity: 'SSR',
-    stats: { atk: 80, def: 40 },
-    description: 'Orb that channels pure elemental energy. Part of the Amplifier\'s Resonance set.',
-    icon: '🔮',
-    cost: 2000,
-  },
-
-  // ── Support's Grace ──
-  {
-    id: 'supports_grace_staff',
-    name: 'Grace Staff',
-    slot: 5,
-    set: 'Support\'s Grace',
+    id: 'supports_grace_armband',
+    name: 'Grace Armband',
+    slot: 'armband',
+    set: "Support's Grace",
     rarity: 'SSR',
     stats: { hp: 600, spd: 20 },
-    description: 'A staff of healing and hope. Part of the Support\'s Grace set.',
+    description: 'An armband of healing and hope. For Supports only.',
     icon: '🪄',
     cost: 2000,
-  },
-  {
-    id: 'supports_grace_amulet',
-    name: 'Grace Amulet',
-    slot: 6,
-    set: 'Support\'s Grace',
-    rarity: 'SSR',
-    stats: { hp: 400, spd: 16 },
-    description: 'An amulet that speeds the flow of life. Part of the Support\'s Grace set.',
-    icon: '📿',
-    cost: 2000,
+    classRequirement: 'Support',
   },
 ];
 
-// ── Helper: Check if a set bonus is active ──
+// ─── Helper Functions ──────────────────────────────────────────────────
+export function getSignatureGiftsForIdentity(identityId: string): EgoGift[] {
+  return egoGifts.filter(g => g.signatureFor === identityId);
+}
+
+export function getClassGiftsForCategory(category: CombatCategory): EgoGift[] {
+  return egoGifts.filter(g => g.classRequirement === category);
+}
+
+export function getSetCounts(equippedGifts: EgoGift[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const gift of equippedGifts) {
+    if (gift.set) {
+      counts[gift.set] = (counts[gift.set] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
 export function isSetBonusActive(
   setName: string,
   piecesEquipped: number,
   isHarmonized: boolean
-): { twoPcActive: boolean; fourPcActive: boolean } {
+): { twoPcActive: boolean; fourPcActive: boolean; sixPcActive: boolean } {
   const bonuses = setBonuses[setName];
-  if (!bonuses) return { twoPcActive: false, fourPcActive: false };
-
-  const twoPc = bonuses.find(b => b.pieces === 2);
-  const fourPc = bonuses.find(b => b.pieces === 4);
-
+  if (!bonuses) return { twoPcActive: false, fourPcActive: false, sixPcActive: false };
+  const has2 = bonuses.some(b => b.pieces === 2);
+  const has4 = bonuses.some(b => b.pieces === 4);
+  const has6 = bonuses.some(b => b.pieces === 6);
   return {
-    twoPcActive: piecesEquipped >= 2 && !!twoPc,
-    fourPcActive: piecesEquipped >= 4 && !!fourPc && isHarmonized,
-  };
-}
-
-// ── Helper: Get active set bonus effects ──
-export function getActiveSetEffects(
-  setName: string,
-  piecesEquipped: number,
-  isHarmonized: boolean
-): { twoPcEffect: string | null; fourPcEffect: string | null } {
-  const bonuses = setBonuses[setName];
-  if (!bonuses) return { twoPcEffect: null, fourPcEffect: null };
-
-  const twoPc = bonuses.find(b => b.pieces === 2);
-  const fourPc = bonuses.find(b => b.pieces === 4);
-
-  return {
-    twoPcEffect: piecesEquipped >= 2 && twoPc ? twoPc.effect : null,
-    fourPcEffect: piecesEquipped >= 4 && fourPc && isHarmonized ? fourPc.effect : null,
+    twoPcActive: piecesEquipped >= 2 && has2,
+    fourPcActive: piecesEquipped >= 4 && has4 && isHarmonized,
+    sixPcActive: piecesEquipped >= 6 && has6 && isHarmonized,
   };
 }
