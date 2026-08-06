@@ -1,5 +1,6 @@
 // src/components/MovesetTab.tsx
 import { useState } from 'react';
+import { decompress } from 'fzstd';
 import useGameStore, { TICKET_COSTS } from '../store/gameStore';
 import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
 
@@ -29,70 +30,20 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// FIXED: Async decode: base64 + zlib (deflate) - now handles full stream chunks
+// Async decode: base64 + zstd
 const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
-    // Step 1: Base64 decode to raw bytes
     const binaryString = atob(code);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
 
-    // Step 2: Use DecompressionStream (if supported by the browser)
-    if (typeof DecompressionStream !== 'undefined') {
-      // Note: If the data uses 'deflate-raw' instead of standard zlib, change 'deflate' to 'deflate-raw' below
-      const ds = new DecompressionStream('deflate'); 
-      const writer = ds.writable.getWriter();
-      await writer.write(bytes);
-      await writer.close();
-
-      const reader = ds.readable.getReader();
-      const chunks: Uint8Array[] = [];
-      let totalLength = 0;
-
-      // Fixed: Loop until reader says 'done' to get ALL data chunks
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value) {
-          chunks.push(value);
-          totalLength += value.length;
-        }
-      }
-
-      // Combine all chunks into a single buffer
-      const fullBuffer = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        fullBuffer.set(chunk, offset);
-        offset += chunk.length;
-      }
-
-      // Decode the full buffer as UTF-8
-      return new TextDecoder().decode(fullBuffer);
-    }
-
-    // Fallback if DecompressionStream is not supported (e.g., older browsers)
-    return new TextDecoder().decode(bytes);
-
-  } catch {
-    // Fallback: If decompression fails, assume the base64 data is already plain text
-    try {
-      const binaryString = atob(code);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      // Try UTF-8 first, fallback to Latin-1 so it doesn't break the UI
-      try {
-        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      } catch {
-        return new TextDecoder('latin1').decode(bytes);
-      }
-    } catch {
-      return 'Invalid code format';
-    }
+    const decompressed = decompress(bytes);
+    return new TextDecoder().decode(decompressed);
+  } catch (err) {
+    console.error('Failed to decode moveset code:', err);
+    return 'Invalid code format';
   }
 };
 
@@ -438,7 +389,7 @@ export default function MovesetTab() {
 
             {selected.video && (
               <div className="mb-4">
-                <a
+                
                   href={selected.video}
                   target="_blank"
                   rel="noopener noreferrer"
