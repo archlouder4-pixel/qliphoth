@@ -1,6 +1,7 @@
 // src/components/MovesetTab.tsx
 import { useState } from 'react';
-import { decompress } from '@bokuweb/zstd-wasm';
+// ✅ SWAPPED TO THE BULLETPROOF BROWSER ZSTD LIBRARY
+import ZstdCodec from 'zstd-codec';
 import useGameStore, { TICKET_COSTS } from '../store/gameStore';
 import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
 
@@ -30,29 +31,43 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
+// ✅ FINAL BULLETPROOF DECODER
 const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
-    // 🔥 CRITICAL FIX: Strip ANY character outside the standard Base64 alphabet.
-    // This handles whitespace, URL-safe chars, AND corrupted Greek symbols (µ ± õ)!
+    // 1. Strip any garbage characters (Greek symbols, whitespace)
     const cleanedCode = code.replace(/[^A-Za-z0-9+/=]/g, '');
 
     if (!cleanedCode) {
       return 'Invalid code format';
     }
 
+    // 2. Base64 decode
     const binaryString = atob(cleanedCode);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
 
-    // PROJECT MOON HOTFIX: Patch the corrupted Zstd magic byte
+    // 3. 🔥 PROJECT MOON MAGIC BYTE HOTFIX
+    // Zstd magic = 0x28 0xB5 0x2F 0xFD (Base64: KLUv/Q)
+    // In-game data uses 0x28 0xB5 0x2F 0xBF (Base64: KLUv/a)
     if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xB5 && bytes[2] === 0x2F) {
       bytes[3] = 0xFD; 
     }
 
-    // Decompress using the browser-friendly WASM library
-    const decompressed = decompress(bytes);
+    // 4. Decompress using zstd-codec (Promise wrapper for browser WASM)
+    const decompressed = await new Promise<Uint8Array>((resolve, reject) => {
+      ZstdCodec.run((zstd: any) => {
+        try {
+          const decomp = new zstd.Decompressor();
+          const result = decomp.decompress(bytes);
+          resolve(result);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
     return new TextDecoder().decode(decompressed);
   } catch (err) {
     console.error('Failed to decode moveset code:', err);
@@ -96,7 +111,6 @@ export default function MovesetTab() {
   const [loadingCode, setLoadingCode] = useState(false);
   const [showRemoved, setShowRemoved] = useState(false);
 
-  // Walkirksnacht event flag
   const walkirksnachtEventActive = true;
 
   const movesetMap = new Map();
