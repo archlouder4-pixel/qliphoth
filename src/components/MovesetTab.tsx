@@ -1,6 +1,6 @@
 // src/components/MovesetTab.tsx
 import { useState } from 'react';
-// ✅ SWAPPED TO THE BULLETPROOF BROWSER ZSTD LIBRARY
+// ✅ NOW BUNDLED CORRECTLY BY VITE
 import ZstdCodec from 'zstd-codec';
 import useGameStore, { TICKET_COSTS } from '../store/gameStore';
 import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
@@ -31,10 +31,10 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// ✅ FINAL BULLETPROOF DECODER
+// ✅ FINAL, BULLETPROOF DECODER
 const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
-    // 1. Strip any garbage characters (Greek symbols, whitespace)
+    // 1. Strip any garbage characters (Greek symbols, whitespace, URL-safe chars)
     const cleanedCode = code.replace(/[^A-Za-z0-9+/=]/g, '');
 
     if (!cleanedCode) {
@@ -50,12 +50,12 @@ const decodeMovesetCode = async (code: string): Promise<string> => {
 
     // 3. 🔥 PROJECT MOON MAGIC BYTE HOTFIX
     // Zstd magic = 0x28 0xB5 0x2F 0xFD (Base64: KLUv/Q)
-    // In-game data uses 0x28 0xB5 0x2F 0xBF (Base64: KLUv/a)
+    // In-game data saves it as 0x28 0xB5 0x2F 0xBF (Base64: KLUv/a)
     if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xB5 && bytes[2] === 0x2F) {
       bytes[3] = 0xFD; 
     }
 
-    // 4. Decompress using zstd-codec (Promise wrapper for browser WASM)
+    // 4. Decompress using zstd-codec (browser-friendly WASM)
     const decompressed = await new Promise<Uint8Array>((resolve, reject) => {
       ZstdCodec.run((zstd: any) => {
         try {
