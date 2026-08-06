@@ -3,11 +3,18 @@ import { useState } from 'react';
 import useGameStore from '../store/gameStore';
 import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
 
-// Define the rank order for display (highest to lowest)
 const RANK_ORDER = ['ALEPH', 'WAW', 'HE', 'TETH', 'ZAYIN', 'WALKIRKSNACHT'];
 
-// Helper to get rank emoji
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
+
+// Helper to decode base64 moveset code
+const decodeMovesetCode = (code: string) => {
+  try {
+    return atob(code);
+  } catch {
+    return 'Invalid code format';
+  }
+};
 
 export default function MovesetTab() {
   const {
@@ -24,11 +31,12 @@ export default function MovesetTab() {
     claimBloodLunacyTicket,
   } = useGameStore();
 
-  // Build a map for moveset data
+  const [selectedMoveset, setSelectedMoveset] = useState<string | null>(null);
+  const [showCode, setShowCode] = useState(false);
+
   const movesetMap = new Map();
   movesetsData.forEach((m: any) => movesetMap.set(m.name, m));
 
-  // Group owned movesets by rank
   const grouped: Record<string, string[]> = {};
   ownedMovesets.forEach(name => {
     const m = movesetMap.get(name);
@@ -38,7 +46,6 @@ export default function MovesetTab() {
     grouped[rank].push(name);
   });
 
-  // Handlers
   const handlePull = (ticketType: 'random' | 'waw' | 'aleph' | 'walkirksnacht') => {
     const result = pullMoveset(ticketType);
     if (result) {
@@ -68,6 +75,8 @@ export default function MovesetTab() {
 
   const bloodProgress = Math.min(100, (bloodLunacy / bloodLunacyThreshold) * 100);
   const canClaimBlood = bloodLunacy >= bloodLunacyThreshold;
+
+  const selected = selectedMoveset ? movesetMap.get(selectedMoveset) : null;
 
   return (
     <div className="space-y-6">
@@ -161,11 +170,15 @@ export default function MovesetTab() {
                     const grade = m?.grade || 'standard';
                     const shards = movesetShards[name] || 0;
                     return (
-                      <div key={name} className="flex justify-between items-center bg-pgr-darker/30 p-2 rounded border border-pgr-border/30">
-                        <div>
-                          <span className="text-sm text-pgr-dim">{name}</span>
+                      <div
+                        key={name}
+                        className="flex justify-between items-center bg-pgr-darker/30 p-2 rounded border border-pgr-border/30 hover:border-cyan-400/50 cursor-pointer transition group"
+                        onClick={() => setSelectedMoveset(name)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-pgr-dim group-hover:text-white transition">{name}</span>
                           {grade !== 'standard' && (
-                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono uppercase">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono uppercase">
                               {grade}
                             </span>
                           )}
@@ -176,7 +189,10 @@ export default function MovesetTab() {
                           )}
                           {shards > 0 && (
                             <button
-                              onClick={() => handleRecycle(name, 1)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRecycle(name, 1);
+                              }}
                               className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded hover:bg-amber-500 hover:text-black transition"
                             >
                               Recycle
@@ -195,6 +211,88 @@ export default function MovesetTab() {
           💡 Duplicate movesets give shards. Recycle 1 shard → 3 Threads + 5 Lunacy.
         </div>
       </div>
+
+      {/* Moveset Detail Modal */}
+      {selectedMoveset && selected && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => {
+            setSelectedMoveset(null);
+            setShowCode(false);
+          }}
+        >
+          <div
+            className="max-w-2xl w-full rounded-lg border border-cyan-500/30 bg-gray-900 p-6 shadow-glow-cyan max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-mono font-bold text-white">{selected.name}</h2>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-sm text-pgr-dim">{getRankEmoji(selected.rank)} {selected.rank}</span>
+                  {selected.grade && selected.grade !== 'standard' && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono uppercase">
+                      {selected.grade}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedMoveset(null);
+                  setShowCode(false);
+                }}
+                className="text-gray-400 hover:text-white text-xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {selected.video && (
+              <div className="mb-4">
+                <a
+                  href={selected.video}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded border border-red-400/30 bg-red-400/5 px-4 py-2 text-sm text-red-400 hover:bg-red-400 hover:text-black transition"
+                >
+                  ▶ Watch Showcase
+                </a>
+              </div>
+            )}
+
+            <div className="mb-3">
+              <button
+                onClick={() => setShowCode(!showCode)}
+                className="text-sm text-cyan-400 hover:text-cyan-300 transition"
+              >
+                {showCode ? 'Hide Code' : 'Show Code'}
+              </button>
+            </div>
+
+            {showCode && (
+              <div className="relative">
+                <pre className="rounded border border-pgr-border bg-pgr-darker/50 p-4 text-xs text-pgr-dim whitespace-pre-wrap font-mono max-h-60 overflow-y-auto">
+                  {decodeMovesetCode(selected.code)}
+                </pre>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(decodeMovesetCode(selected.code));
+                    alert('Code copied to clipboard!');
+                  }}
+                  className="absolute top-2 right-2 rounded bg-cyan-500/20 px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-500 hover:text-black transition"
+                >
+                  Copy
+                </button>
+              </div>
+            )}
+
+            {!selected.video && !showCode && (
+              <p className="text-sm text-pgr-dim/50">No additional details available.</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
