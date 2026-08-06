@@ -30,15 +30,19 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// Async decode: base64 + zstd
+// ✅ FIXED: Sanitize Base64 + Zstandard decompression via fzstd
 const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
-    const binaryString = atob(code);
+    // Clean up whitespace and convert URL-safe Base64 to standard Base64
+    const cleanedCode = code.trim().replace(/-/g, '+').replace(/_/g, '/');
+
+    const binaryString = atob(cleanedCode);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
 
+    // Zstandard decompression
     const decompressed = decompress(bytes);
     return new TextDecoder().decode(decompressed);
   } catch (err) {
@@ -83,18 +87,16 @@ export default function MovesetTab() {
   const [loadingCode, setLoadingCode] = useState(false);
   const [showRemoved, setShowRemoved] = useState(false);
 
-  // Walkirksnacht event flag - you can set this based on your event system
+  // Walkirksnacht event flag
   const walkirksnachtEventActive = true; // Set to false when event is over
 
   const movesetMap = new Map();
   movesetsData.forEach((m: any) => movesetMap.set(m.name, m));
 
-  // Group owned movesets by rank, filter out removed if not showing them
   const grouped: Record<string, string[]> = {};
   ownedMovesets.forEach(name => {
     const m = movesetMap.get(name);
     if (!m) return;
-    // Skip removed movesets unless showing them
     if (m.grade === 'removed' && !showRemoved) return;
     const rank = m.rank || 'UNKNOWN';
     if (!grouped[rank]) grouped[rank] = [];
@@ -155,7 +157,6 @@ export default function MovesetTab() {
     setLoadingCode(false);
   };
 
-  // Count movesets by grade for stats
   const gradeCounts: Record<string, number> = {};
   ownedMovesets.forEach(name => {
     const m = movesetMap.get(name);
