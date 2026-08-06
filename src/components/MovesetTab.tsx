@@ -1,6 +1,5 @@
 // src/components/MovesetTab.tsx
 import { useState } from 'react';
-// ✅ NOW BUNDLED CORRECTLY BY VITE
 import ZstdCodec from 'zstd-codec';
 import useGameStore, { TICKET_COSTS } from '../store/gameStore';
 import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
@@ -31,7 +30,6 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// ✅ FINAL, BULLETPROOF DECODER
 const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
     // 1. Strip any garbage characters (Greek symbols, whitespace, URL-safe chars)
