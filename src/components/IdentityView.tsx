@@ -1,4 +1,4 @@
-// IdentityView.tsx – Full file with all skills shown in Details tab, upgradable skills in Skills tab
+// src/views/IdentityView.tsx – Full file with 15-slot EGO gifts, empty + slots, conditional resonance
 import { useState, useEffect } from 'react';
 import useGameStore, {
   RESONANCE_TYPES,
@@ -415,6 +415,9 @@ export default function IdentityView() {
     const lowerTypes: ResonanceType[] = ['ego_skill_level', 'core_passive_level', 'class_skill_level', 'precision_attack', 'tactical_modification', 'strengthened_power', 'positioned_action'];
     return isUpper(index) ? upperTypes : lowerTypes;
   };
+
+  // ─── Check if identity has any gift equipped ──────────────────────────
+  const hasAnyGift = equippedGifts.some(g => g.giftId !== '');
 
   // ─── Early returns ──────────────────────────────────────────────────────
   if (ownedIdentities.length === 0) {
@@ -955,7 +958,7 @@ export default function IdentityView() {
             </div>
           )}
 
-          {/* ═══ GIFTS TAB ═══ */}
+          {/* ═══ GIFTS TAB (15 slots) ═══ */}
           {activeTab === 'gifts' && (
             <div className="space-y-6 max-w-4xl">
               {/* ─── 15 Gift Slots ─────────────────────────────────────── */}
@@ -982,6 +985,7 @@ export default function IdentityView() {
 
                         {gift ? (
                           <>
+                            {/* ─── Gift Equipped ────────────────────── */}
                             <div className="w-12 h-12 rounded-lg flex items-center justify-center text-3xl bg-gray-700/50">
                               {gift.icon || '🔮'}
                             </div>
@@ -993,7 +997,7 @@ export default function IdentityView() {
                               <div className="h-full bg-purple-500 transition-all" style={{ width: `${(slot!.exp / expForLevel(slot!.level)) * 100}%` }} />
                             </div>
 
-                            {/* Resonance */}
+                            {/* ─── Resonance (only if gift equipped) ── */}
                             <div className="flex gap-1 mt-1">
                               {[1, 2].map(idx => {
                                 const key = idx === 1 ? 'slot1' : 'slot2';
@@ -1062,10 +1066,10 @@ export default function IdentityView() {
                             </div>
                           </>
                         ) : (
-                          // Empty slot
+                          // ─── Empty Slot – Shows "+" ──────────────
                           <div className="flex flex-col items-center justify-center flex-1 text-gray-500">
-                            <span className="text-2xl opacity-30">+</span>
-                            <span className="text-[10px]">Empty</span>
+                            <span className="text-4xl opacity-30">+</span>
+                            <span className="text-[10px] mt-1 text-gray-600">Empty</span>
                             <span className="text-[8px] text-gray-600">{isSetSlot ? 'Set Slot' : 'Buff Slot'}</span>
                           </div>
                         )}
@@ -1094,6 +1098,31 @@ export default function IdentityView() {
                   })()}
                   <p className="text-[10px] text-gray-400 mt-2">⚡ 4pc & 6pc bonuses require Harmonization (signature weapon).</p>
                 </div>
+
+                {/* ─── Resonance System ───────────────────────────────── */}
+                {hasAnyGift && (
+                  <div className="mt-6 border border-gray-700 p-3 bg-gray-800/50">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[10px] font-bold text-cyan-400 tracking-wider uppercase">Resonance System</p>
+                      <p className="text-[10px] text-gray-400 font-mono">E.G.O Manifest Essence: {egoManifestEssence}</p>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mb-2">Click any resonance slot below to assign/change resonance type (costs 1 Essence).</p>
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                      {resonance.slots.slice(0, UPPER_RESONANCE_SLOTS).map((slot, idx) => (
+                        <ResonanceSlot key={idx} slot={slot} index={idx} onClick={() => handleResonanceSlotClick(idx)} onHypertune={() => handleHypertune(idx)} />
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-2">
+                      {resonance.slots.slice(UPPER_RESONANCE_SLOTS).map((slot, idx) => {
+                        const realIdx = idx + UPPER_RESONANCE_SLOTS;
+                        return <ResonanceSlot key={realIdx} slot={slot} index={realIdx} onClick={() => handleResonanceSlotClick(realIdx)} onHypertune={() => handleHypertune(realIdx)} />;
+                      })}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-2">
+                      Total: HP+{getTotalResonanceStats().hp} ATK+{getTotalResonanceStats().atk} DEF+{getTotalResonanceStats().def} SPD+{getTotalResonanceStats().spd} CRIT+{getTotalResonanceStats().crit} Clash+{getTotalResonanceStats().clashPower}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* ─── Owned Gifts Inventory ────────────────────────────── */}
@@ -1115,7 +1144,6 @@ export default function IdentityView() {
                           const gift = egoGifts.find(g => g.id === id);
                           if (!gift) return null;
                           const isEquipped = equippedGifts.some(g => g.giftId === id);
-                          // Check if the gift's slot is empty
                           const targetSlot = equippedGifts.find(g => g.slot === gift.slot);
                           const canEquip = !targetSlot?.giftId;
                           return (
