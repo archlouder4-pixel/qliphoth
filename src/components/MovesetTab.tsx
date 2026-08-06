@@ -1,6 +1,7 @@
 // src/components/MovesetTab.tsx
 import { useState } from 'react';
-import { decompress } from 'fzstd';
+// ✅ SWAPPED TO BROWSER-FRIENDLY WASM
+import { decompress } from '@bokuweb/zstd-wasm';
 import useGameStore, { TICKET_COSTS } from '../store/gameStore';
 import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
 
@@ -30,7 +31,7 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// ✅ FIXED: Sanitize Base64, patch Project Moon Zstd magic byte, then decompress
+// ✅ FIXED: Uses browser WASM and patches the corrupted Zstd magic byte
 const decodeMovesetCode = async (code: string): Promise<string> => {
   try {
     // Clean up whitespace and convert URL-safe Base64 to standard Base64
@@ -42,14 +43,15 @@ const decodeMovesetCode = async (code: string): Promise<string> => {
       bytes[i] = binaryString.charCodeAt(i);
     }
 
-    // 🔥 HOTFIX: Project Moon's Base64 often corrupts the 4th byte of the Zstd magic number.
-    // Zstd magic = 0x28 0xB5 0x2F 0xFD (Base64: KLUv/Q).
-    // In-game data sometimes has 0x28 0xB5 0x2F 0xBF (Base64: KLUv/a).
-    // We force the correct 4th byte, otherwise fzstd will throw "invalid zstd data".
+    // 🔥 PROJECT MOON HOTFIX: 
+    // Base64 often corrupts the 4th byte of the Zstd magic number.
+    // Zstd magic = 0x28 0xB5 0x2F 0xFD. In-game data sometimes saves it as 0xBF.
+    // The WASM library crashes if we don't fix this.
     if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xB5 && bytes[2] === 0x2F) {
       bytes[3] = 0xFD; 
     }
 
+    // Use the WASM browser-friendly decompress
     const decompressed = decompress(bytes);
     return new TextDecoder().decode(decompressed);
   } catch (err) {
