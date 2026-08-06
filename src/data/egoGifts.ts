@@ -71,6 +71,32 @@ export interface EgoGift {
   special?: string;
 }
 
+// ─── Resonance Stats (for gift resonance) ──────────────────────────────
+export const RESONANCE_STATS: Record<string, { atk: number; hp: number; def: number; spd?: number; crit?: number }> = {
+  ATK: { atk: 15, hp: 0, def: 0 },
+  HP: { atk: 0, hp: 80, def: 0 },
+  DEF: { atk: 0, hp: 0, def: 10 },
+  SPD: { atk: 0, hp: 0, def: 0, spd: 8 },
+  CRIT: { atk: 0, hp: 0, def: 0, crit: 5 },
+  CLASH: { atk: 0, hp: 0, def: 0, spd: 0, crit: 0 },
+};
+
+// ─── Hypertune Levels ──────────────────────────────────────────────────
+export interface HypertuneLevel {
+  level: number;
+  cost: number;
+  stats: { atk: number; hp: number; def: number; spd?: number; crit?: number };
+}
+
+export const HYPERTUNE_LEVELS: HypertuneLevel[] = [
+  { level: 0, cost: 0, stats: { atk: 0, hp: 0, def: 0 } },
+  { level: 1, cost: 500, stats: { atk: 10, hp: 50, def: 5 } },
+  { level: 2, cost: 1000, stats: { atk: 20, hp: 100, def: 10 } },
+  { level: 3, cost: 2000, stats: { atk: 35, hp: 175, def: 15 } },
+  { level: 4, cost: 3500, stats: { atk: 50, hp: 250, def: 25 } },
+  { level: 5, cost: 5000, stats: { atk: 70, hp: 350, def: 35 } },
+];
+
 // ─── Set Bonuses ──────────────────────────────────────────────────────
 export interface SetBonus {
   pieces: number;        // 2, 4, or 6
