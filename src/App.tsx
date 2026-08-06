@@ -1,4 +1,4 @@
-// App.tsx – with DUEL tab + identity filtering + duel state (score starts at 0)
+// App.tsx – with Movesets tab and Blood Lunacy
 import { useEffect, useState } from 'react';
 import useGameStore, { TAB_UNLOCK_LEVELS, TAB_UNLOCK_LABELS } from './store/gameStore';
 import StoryView from './components/StoryView';
@@ -22,8 +22,9 @@ import { identities } from './data/identities';
 import DepartmentView from './components/DepartmentView';
 import ExplorationView from './components/ExplorationView';
 import ReceptionMode from './components/ReceptionMode';
+import MovesetTab from './components/MovesetTab'; // new
 
-type Tab = 'story' | 'gacha' | 'identities' | 'weapons' | 'ego-gifts' | 'daily' | 'competitive' | 'shardShop' | 'department' | 'exploration' | 'duel';
+type Tab = 'story' | 'gacha' | 'identities' | 'weapons' | 'ego-gifts' | 'daily' | 'competitive' | 'shardShop' | 'department' | 'exploration' | 'duel' | 'movesets';
 
 const TAB_UNLOCK_KEY: Partial<Record<Tab, keyof typeof TAB_UNLOCK_LEVELS>> = {
   gacha: 'gacha',
@@ -35,6 +36,7 @@ const TAB_UNLOCK_KEY: Partial<Record<Tab, keyof typeof TAB_UNLOCK_LEVELS>> = {
   department: 'department',
   exploration: 'exploration',
   duel: 'duel',
+  movesets: 'movesets', // added
 };
 
 const TAB_TUTORIAL_KEY: Partial<Record<Tab, string>> = {
@@ -48,6 +50,7 @@ const TAB_TUTORIAL_KEY: Partial<Record<Tab, string>> = {
   department: 'department',
   exploration: 'exploration',
   duel: 'duel',
+  movesets: 'movesets', // added (you may want to add tutorial steps)
 };
 
 export default function App() {
@@ -67,7 +70,6 @@ export default function App() {
     completeTutorialSequence,
     initializeAdmin,
     ownedIdentities,
-    // ─── Duel state (added to gameStore) ────────────────────────────────
     duel,
     startDuel,
     endDuel,
@@ -93,12 +95,10 @@ export default function App() {
   );
   const showShardShop = user?.isAdmin ? true : (hasMaxRankSSR || hasMaxRankSR);
 
-  // ─── Filter valid identity IDs for Duel ────────────────────────────────
   const validIdentityIds = identities.map(i => i.id);
   const filteredOwnedIds = safeOwned
     .map(o => o.identityId)
     .filter(id => validIdentityIds.includes(id));
-  // Fallback to Arthur if no valid IDs exist
   const duelAvailableIds = filteredOwnedIds.length > 0 ? filteredOwnedIds : ['arthur_excalibur'];
 
   useEffect(() => {
@@ -115,7 +115,7 @@ export default function App() {
   useEffect(() => {
     if (!user || user.isAdmin) return;
     if (pendingTutorialSequence || currentTutorialStep) return;
-    const allTabs: Tab[] = ['daily', 'gacha', 'identities', 'weapons', 'ego-gifts', 'competitive', 'department', 'exploration', 'duel'];
+    const allTabs: Tab[] = ['daily', 'gacha', 'identities', 'weapons', 'ego-gifts', 'competitive', 'department', 'exploration', 'duel', 'movesets'];
     if (showShardShop) allTabs.push('shardShop');
 
     for (const tab of allTabs) {
@@ -178,6 +178,7 @@ export default function App() {
     { id: 'department', label: 'DEPARTMENT', icon: '🏛️' },
     { id: 'exploration', label: 'EXPLORATION', icon: '🗺️' },
     { id: 'duel', label: 'DUEL', icon: '⚔️' },
+    { id: 'movesets', label: 'MOVESETS', icon: '📚' }, // new
   ];
 
   if (showShardShop) {
@@ -255,7 +256,7 @@ export default function App() {
           <ReceptionMode
             onExit={() => setActiveTab('story')}
             availableIdentities={duelAvailableIds}
-            initialScore={duel?.score ?? 0}        // <-- changed from 1000 to 0
+            initialScore={duel?.score ?? 0}
             initialLives={duel?.lives ?? 5}
             onDuelUpdate={(score, lives) => {
               updateDuelScore(score);
@@ -264,6 +265,8 @@ export default function App() {
             onDuelResult={(result) => recordDuelResult(result)}
           />
         );
+      case 'movesets':
+        return <MovesetTab />;
       default: return null;
     }
   };
