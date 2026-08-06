@@ -1,4 +1,4 @@
-// src/store/gameStore.ts – Full file with moveset integration and daily/weekly bonus claims
+// src/store/gameStore.ts – Full file with moveset integration + blood lunacy milestone
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { identities, storyOnlyIdentities, getClassCategories, type Identity, expForLevel } from '../data/identities';
@@ -21,8 +21,7 @@ import { abnormalities } from '../data/abnormalities';
 
 // ── Moveset data ──────────────────────────────────────────────────────
 // Import from movesets.js (adjust path as needed)
-// This file is CommonJS; we use require.
-const movesetsData = require('../../movesets');
+const movesetsData = require('../data/movesets');
 
 // Define a type for a moveset (enriched with grade/obtainable)
 export interface Moveset {
@@ -48,7 +47,7 @@ for (const m of movesets) {
 }
 
 // ── STORE VERSION ──────────────────────────────────────────────────────
-const STORE_VERSION = 27; // Incremented for moveset fields and bonus flags
+const STORE_VERSION = 28; // Incremented for blood lunacy
 
 // ── TAB UNLOCK CONSTANTS ──────────────────────────────────────────────
 export const TAB_UNLOCK_LEVELS = {
@@ -431,12 +430,16 @@ export interface GameState {
   };
 
   // ── Moveset fields ────────────────────────────────────────────────────
-  ownedMovesets: string[];                     // names of owned movesets
-  movesetTickets: number;                      // generic ticket for random moveset
-  wawMovesetTickets: number;                  // ticket that guarantees WAW rank (or higher)
-  alephMovesetTickets: number;                // ticket that guarantees ALEPH rank
-  walkirksnachtMovesetTickets: number;        // exclusive ticket for Walkirksnacht rank
-  movesetShards: Record<string, number>;       // duplicate shards per moveset (for recycling)
+  ownedMovesets: string[];
+  movesetTickets: number;
+  wawMovesetTickets: number;
+  alephMovesetTickets: number;
+  walkirksnachtMovesetTickets: number;
+  movesetShards: Record<string, number>;
+
+  // ── Blood Lunacy fields ──────────────────────────────────────────────
+  bloodLunacy: number;
+  bloodLunacyThreshold: number;
 }
 
 function generateFloatingGuarantee(): number {
@@ -847,6 +850,10 @@ const INITIAL_STATE: GameState = {
   alephMovesetTickets: 0,
   walkirksnachtMovesetTickets: 0,
   movesetShards: {},
+
+  // ── Blood Lunacy initial state ──────────────────────────────────────
+  bloodLunacy: 0,
+  bloodLunacyThreshold: 1000,
 };
 
 const useGameStore = create<GameState>()(
@@ -1123,6 +1130,8 @@ const useGameStore = create<GameState>()(
             t.id === 'daily_story' ? { ...t, progress: Math.min(t.max, t.progress + 1) } : t
           ),
         }));
+        // ── Blood Lunacy from story ──────────────────────────────────
+        get().addBloodLunacy(100);
         get().addManagerExp(750);
       },
 
@@ -1741,6 +1750,7 @@ const useGameStore = create<GameState>()(
             ),
           }));
           get().addManagerExp(750);
+          get().addBloodLunacy(100);
         }
       },
 
@@ -1863,6 +1873,8 @@ const useGameStore = create<GameState>()(
           ),
         }));
         get().addManagerExp(Math.min(300, Math.floor(boostedScore / 1500)));
+        // ── Blood Lunacy from competitive ──────────────────────────────
+        get().addBloodLunacy(50);
       },
       promoteSquad: () => {
         const state = get();
@@ -1977,6 +1989,7 @@ const useGameStore = create<GameState>()(
           wawMovesetTickets: 99,
           alephMovesetTickets: 99,
           walkirksnachtMovesetTickets: 99,
+          bloodLunacy: 9999,
         }));
       },
       adminGiveSSRShards: (amount: number = 20): string | null => {
@@ -2361,6 +2374,9 @@ const useGameStore = create<GameState>()(
           },
         }));
 
+        // ── Blood Lunacy from facility work ──────────────────────────────
+        if (isSuccess) get().addBloodLunacy(10);
+
         return {
           success: true,
           isSuccess,
@@ -2433,6 +2449,8 @@ const useGameStore = create<GameState>()(
             },
             lunacy: s.lunacy + lunacyReward,
           }));
+          // ── Blood Lunacy from ordeal victory ──────────────────────────
+          get().addBloodLunacy(25);
         } else {
           set((s) => ({
             facility: {
@@ -2457,6 +2475,8 @@ const useGameStore = create<GameState>()(
               deployedAbnos: updatedAbnos,
             },
           }));
+          // ── Blood Lunacy from breach suppression ──────────────────────
+          get().addBloodLunacy(30);
         }
       },
 
@@ -2517,6 +2537,8 @@ const useGameStore = create<GameState>()(
             completedCoreSuppressions: [...s.facility.completedCoreSuppressions, departmentKey],
           },
         }));
+        // ── Blood Lunacy from core suppression ──────────────────────────
+        get().addBloodLunacy(100);
         return { success: true };
       },
 
@@ -2584,13 +2606,18 @@ const useGameStore = create<GameState>()(
       endDuel: () => set((state) => ({ duel: { ...state.duel, active: false } })),
       updateDuelScore: (score: number) => set((state) => ({ duel: { ...state.duel, score: Math.max(0, score) } })),
       updateDuelLives: (lives: number) => set((state) => ({ duel: { ...state.duel, lives: Math.max(0, lives) } })),
-      recordDuelResult: (result: 'win' | 'loss') => set((state) => ({
-        duel: {
-          ...state.duel,
-          streak: result === 'win' ? state.duel.streak + 1 : 0,
-          history: [...state.duel.history, { result, timestamp: Date.now() }].slice(-50),
-        }
-      })),
+      recordDuelResult: (result: 'win' | 'loss') => {
+        set((state) => ({
+          duel: {
+            ...state.duel,
+            streak: result === 'win' ? state.duel.streak + 1 : 0,
+            history: [...state.duel.history, { result, timestamp: Date.now() }].slice(-50),
+          }
+        }));
+        // ── Blood Lunacy from duel ──────────────────────────────────────
+        if (result === 'win') get().addBloodLunacy(25);
+        else get().addBloodLunacy(10);
+      },
 
       // ─── MOVESET ACTIONS ──────────────────────────────────────────────────
 
@@ -2723,6 +2750,23 @@ const useGameStore = create<GameState>()(
           lunacy: s.lunacy - cost,
           [key]: s[key] + 1,
         }));
+        return true;
+      },
+
+      // ─── BLOOD LUNACY ACTIONS ──────────────────────────────────────────
+
+      addBloodLunacy: (amount: number) => {
+        set((state) => ({ bloodLunacy: state.bloodLunacy + amount }));
+      },
+
+      claimBloodLunacyTicket: () => {
+        const state = get();
+        if (state.bloodLunacy < state.bloodLunacyThreshold) return false;
+        set((s) => ({
+          bloodLunacy: s.bloodLunacy - s.bloodLunacyThreshold,
+          movesetTickets: s.movesetTickets + 1,
+        }));
+        get().addManagerExp(100);
         return true;
       },
     }),
@@ -2898,6 +2942,10 @@ const useGameStore = create<GameState>()(
         if (newState.allDailyBonusClaimed === undefined) newState.allDailyBonusClaimed = false;
         if (newState.allWeeklyBonusClaimed === undefined) newState.allWeeklyBonusClaimed = false;
 
+        // ─── Blood Lunacy migration ────────────────────────────────────
+        if (newState.bloodLunacy === undefined) newState.bloodLunacy = 0;
+        if (newState.bloodLunacyThreshold === undefined) newState.bloodLunacyThreshold = 1000;
+
         return newState;
       },
       onRehydrateStorage: () => (state) => {
@@ -2990,6 +3038,10 @@ const useGameStore = create<GameState>()(
         // ─── Bonus flags ──────────────────────────────────────────────
         if (state.allDailyBonusClaimed === undefined) state.allDailyBonusClaimed = false;
         if (state.allWeeklyBonusClaimed === undefined) state.allWeeklyBonusClaimed = false;
+
+        // ─── Blood Lunacy fields ──────────────────────────────────────
+        if (state.bloodLunacy === undefined) state.bloodLunacy = 0;
+        if (state.bloodLunacyThreshold === undefined) state.bloodLunacyThreshold = 1000;
 
         // ─── Ensure daily/weekly tasks include moveset tasks ──────────
         const dailyTasks = state.dailyTasks || [];
@@ -3085,6 +3137,9 @@ const useGameStore = create<GameState>()(
         alephMovesetTickets: state.alephMovesetTickets,
         walkirksnachtMovesetTickets: state.walkirksnachtMovesetTickets,
         movesetShards: state.movesetShards,
+        // Blood Lunacy
+        bloodLunacy: state.bloodLunacy,
+        bloodLunacyThreshold: state.bloodLunacyThreshold,
       }),
     }
   )
