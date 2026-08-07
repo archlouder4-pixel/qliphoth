@@ -30,25 +30,25 @@ const GRADE_LABELS: Record<string, string> = {
 
 const getRankEmoji = (rank: string) => rankEmojis[rank as keyof typeof rankEmojis] || '❓';
 
-// Messages returned by decodeMovesetCode when the code can't be decoded.
-// Kept as constants so the UI can reliably detect "this isn't real data"
-// without string-matching on arbitrary error text.
+// Message returned when a moveset has no code at all.
 const CODE_MISSING = 'No code available for this moveset yet.';
-const CODE_CORRUPTED =
-  'This code is currently unavailable — it appears to be incomplete in our data. Check back later!';
-const CODE_INVALID_DATA = "This code is corrupted (invalid data) and can't be decoded.";
 
-const FAILURE_MESSAGES: string[] = [CODE_MISSING, CODE_CORRUPTED, CODE_INVALID_DATA];
+// JJS moveset codes are pasted directly into the in-game Skill Builder,
+// which does its own decompression — players need the exact original
+// compressed string, not a decoded/decompressed version of it.
+// We still run a lightweight validity check in the background (does this
+// at least base64-decode and decompress?) so we can warn the player if a
+// code looks incomplete, without altering what gets copied/downloaded.
+const getDisplayCode = (rawCode: string): string => {
+  const cleaned = rawCode.trim();
+  if (!cleaned) return CODE_MISSING;
+  return cleaned;
+};
 
-const decodeMovesetCode = async (code: string): Promise<string> => {
-  // 1. Strip any garbage characters (Greek symbols, whitespace, URL-safe chars)
+const checkCodeValidity = async (code: string): Promise<boolean> => {
   const cleanedCode = code.replace(/[^A-Za-z0-9+/=]/g, '');
+  if (!cleanedCode) return false;
 
-  if (!cleanedCode) {
-    return CODE_MISSING;
-  }
-
-  // 2. Base64 decode
   let bytes: Uint8Array;
   try {
     const binaryString = atob(cleanedCode);
@@ -56,48 +56,37 @@ const decodeMovesetCode = async (code: string): Promise<string> => {
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
-  } catch (err) {
-    console.warn('Moveset code failed base64 decode (likely truncated/incomplete source data):', err);
-    return CODE_INVALID_DATA;
+  } catch {
+    return false;
   }
 
-  // 3. 🔥 PROJECT MOON MAGIC BYTE HOTFIX
-  // Zstd magic = 0x28 0xB5 0x2F 0xFD (Base64: KLUv/Q)
-  // In-game data saves it as 0x28 0xB5 0x2F 0xBF (Base64: KLUv/a)
+  // PROJECT MOON MAGIC BYTE HOTFIX
   if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xB5 && bytes[2] === 0x2F) {
     bytes[3] = 0xFD;
   }
 
-  // 4. Decompress using zstd-codec (browser-friendly WASM)
-  // Note: the library exposes `Simple` and `Streaming` classes — there is no
-  // `Decompressor` class. Simple is fine here since these payloads are small.
   try {
-    const decompressed = await new Promise<Uint8Array>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       ZstdCodec.run((zstd: any) => {
         try {
           const simple = new zstd.Simple();
-          const result = simple.decompress(bytes);
-          resolve(result);
+          simple.decompress(bytes);
+          resolve();
         } catch (err) {
           reject(err);
         }
       });
     });
-
-    return new TextDecoder().decode(decompressed);
+    return true;
   } catch (err) {
-    // Known issue: some codes were truncated during data collection (originally
-    // split across multiple Discord messages / posted as attachments, and only
-    // partially captured) and can't be decompressed. Log quietly instead of
-    // spamming the console as an uncaught error.
-    console.warn('Moveset code failed to decompress (likely incomplete source data):', err);
-    return CODE_CORRUPTED;
+    console.warn('Moveset code failed validity check (likely incomplete source data):', err);
+    return false;
   }
 };
 
-// Download decoded code as .txt
-const downloadMovesetCode = (name: string, decodedCode: string) => {
-  const blob = new Blob([decodedCode], { type: 'text/plain' });
+// Download the raw moveset code as .txt (ready to paste into JJS Skill Builder)
+const downloadMovesetCode = (name: string, code: string) => {
+  const blob = new Blob([code], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -183,13 +172,29 @@ export default function MovesetTab() {
       setCodeError(false);
       return;
     }
+
+    const display = getDisplayCode(selected.code);
+    if (display === CODE_MISSING) {
+      setDecodedCode(display);
+      setCodeError(true);
+      setShowCode(true);
+      return;
+    }
+
+    // Show the real, paste-ready code immediately — no need to wait on
+    // decompression just to display it.
+    setDecodedCode(display);
+    setCodeError(false);
+    setShowCode(true);
+
+    // Validate in the background so we can flag likely-incomplete codes
+    // without blocking the player from copying/using it.
     setLoadingCode(true);
     try {
-      const decoded = await decodeMovesetCode(selected.code);
-      const failed = FAILURE_MESSAGES.includes(decoded);
-      setCodeError(failed);
-      setDecodedCode(decoded);
-      setShowCode(true);
+      const valid = await checkCodeValidity(selected.code);
+      if (!valid) {
+        setCodeError(true);
+      }
     } finally {
       setLoadingCode(false);
     }
@@ -450,12 +455,11 @@ export default function MovesetTab() {
             <div className="mb-3 flex items-center gap-3">
               <button
                 onClick={handleShowCode}
-                disabled={loadingCode}
-                className="text-sm text-cyan-400 hover:text-cyan-300 transition disabled:opacity-50"
+                className="text-sm text-cyan-400 hover:text-cyan-300 transition"
               >
-                {loadingCode ? 'Decoding...' : showCode ? 'Hide Code' : 'Show Code'}
+                {showCode ? 'Hide Code' : 'Show Code'}
               </button>
-              {showCode && decodedCode && !codeError && (
+              {showCode && decodedCode && decodedCode !== CODE_MISSING && (
                 <button
                   onClick={() => downloadMovesetCode(selected.name, decodedCode)}
                   className="text-sm text-green-400 hover:text-green-300 transition"
@@ -463,24 +467,27 @@ export default function MovesetTab() {
                   ⬇ Download .txt
                 </button>
               )}
+              {loadingCode && (
+                <span className="text-xs text-pgr-dim/50">Verifying...</span>
+              )}
             </div>
 
             {showCode && decodedCode && (
               <div className="relative">
-                <pre
-                  className={`rounded border p-4 text-xs whitespace-pre-wrap font-mono max-h-60 overflow-y-auto ${
-                    codeError
-                      ? 'border-amber-500/30 bg-amber-500/5 text-amber-300'
-                      : 'border-pgr-border bg-pgr-darker/50 text-pgr-dim'
-                  }`}
-                >
-                  {codeError ? `⚠️ ${decodedCode}` : decodedCode}
+                {codeError && (
+                  <p className="mb-2 text-xs text-amber-400">
+                    ⚠️ This code may be incomplete in our data — it might not import correctly in-game.
+                    You can still copy it, but if it fails to import, the source data is missing pieces.
+                  </p>
+                )}
+                <pre className="rounded border border-pgr-border bg-pgr-darker/50 p-4 text-xs text-pgr-dim whitespace-pre-wrap font-mono max-h-60 overflow-y-auto break-all">
+                  {decodedCode}
                 </pre>
-                {!codeError && (
+                {decodedCode !== CODE_MISSING && (
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(decodedCode);
-                      alert('Code copied to clipboard!');
+                      alert('Code copied to clipboard! Paste it into the JJS Skill Builder import box.');
                     }}
                     className="absolute top-2 right-2 rounded bg-cyan-500/20 px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-500 hover:text-black transition"
                   >
