@@ -224,12 +224,15 @@ export class ExplorationRoom extends DurableObject {
       totalEnemiesDefeated: 0,
       bossesDefeated: 0,
       finalScore: null,
+      roomId: ctx.id.toString(), // ✅ Store room ID
     };
     ctx.blockConcurrencyWhile(async () => {
       const stored = await ctx.storage.get<ExplorationRoomState>(this.storageKey);
       if (stored) {
         this.state = stored;
-        // Rebuild map from stored identityStates (we assume each has a playerId field)
+        // Ensure roomId is set
+        if (!this.state.roomId) this.state.roomId = ctx.id.toString();
+        // Rebuild map from stored identityStates
         this.state.identityStates.forEach((s, idx) => {
           if ((s as any).playerId) {
             this.playerIdentityMap.set((s as any).playerId, idx);
@@ -277,9 +280,9 @@ export class ExplorationRoom extends DurableObject {
           const identityState: ExplorationIdentityState = {
             ...data.identityState,
             isActive: false,
-            playerId: playerId, // store playerId on the identity
+            playerId: playerId,
+            playerName: data.playerName || 'Guest',
           };
-          // Add to state
           this.state.identityStates.push(identityState);
           const idx = this.state.identityStates.length - 1;
           this.playerIdentityMap.set(playerId, idx);
@@ -290,9 +293,20 @@ export class ExplorationRoom extends DurableObject {
           }
           await this.saveState();
         }
-        // Send current state
+
+        // ─── ✅ FIX: Send full state directly to this new client ───
+        const fullState = {
+          type: 'stateUpdate',
+          state: this.state,
+        };
+        ws.send(JSON.stringify(fullState));
+
+        // Also send a 'joined' confirmation (client may listen for it)
         ws.send(JSON.stringify({ type: 'joined', state: this.state }));
+
+        // Broadcast to all other clients (the new client will get it again – harmless)
         this.broadcastState();
+
         break;
       }
 
