@@ -266,7 +266,7 @@ export class ExplorationRoom extends DurableObject {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
-    // ✅ FIX: use ws.deserializeAttachment (not ctx.getWebSocketData)
+    // ✅ use ws.deserializeAttachment (not ctx.getWebSocketData)
     const session = ws.deserializeAttachment() as { playerId?: string };
 
     switch (data.type) {
@@ -302,7 +302,8 @@ export class ExplorationRoom extends DurableObject {
       }
 
       case 'startExploration': {
-        await this.handleStartExploration(data.placeId, data.difficulty);
+        // ✅ Pass the ws so we can send a direct update to the initiator
+        await this.handleStartExploration(ws, data.placeId, data.difficulty);
         break;
       }
 
@@ -332,7 +333,8 @@ export class ExplorationRoom extends DurableObject {
 
   // ─── Core actions ──────────────────────────────────────────────────
 
-  private async handleStartExploration(placeId: string, difficulty: string) {
+  // ✅ UPDATED: accepts ws as first argument to send direct response
+  private async handleStartExploration(ws: WebSocket, placeId: string, difficulty: string) {
     const place = explorationPlaces.find(p => p.id === placeId);
     if (!place) return;
     this.state.placeId = placeId;
@@ -360,7 +362,13 @@ export class ExplorationRoom extends DurableObject {
     }
     this.state.clashData = null;
     this.applySynergy();
+
     await this.saveState();
+
+    // ✅ Send directly to the initiator (this guarantees the host gets the update)
+    ws.send(JSON.stringify({ type: 'stateUpdate', state: this.state }));
+
+    // Also broadcast to everyone else (the initiator will get it twice, harmless)
     this.broadcastState();
   }
 
@@ -729,9 +737,8 @@ export class ExplorationRoom extends DurableObject {
     }
   }
 
-  // ─── WebSocket close – FULL implementation (fixed) ────────────────
+  // ─── WebSocket close – FULL implementation ────────────────────────
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    // ✅ FIX: use ws.deserializeAttachment
     const session = ws.deserializeAttachment() as { playerId?: string };
     if (!session?.playerId) return;
 
