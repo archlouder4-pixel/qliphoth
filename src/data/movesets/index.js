@@ -21,5 +21,14 @@ export const data = [
   moveset_8,
   moveset_9,
   moveset_10,
-  moveset_11
+  moveset_11,
 ];
+
+export const ranks = {
+  ZAYIN: '<:zayin:1474861280836976721>',
+  TETH: '<:teth:1474861321475592387>',
+  HE: '<:he:1474861343466061906>',
+  WAW: '<:waw:1474861364383191113>',
+  ALEPH: '<:aleph:1474861385396649994>',
+  WALKIRKSNACHT: '<:exclusive:1477445829676499046>',
+};
