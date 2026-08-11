@@ -1,5 +1,5 @@
 // ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op)
-// Added: custom room codes, global chat (visible only in co‑op), solo difficulty UI overlay.
+// Added: proper handling of WebSocket 'joined' and 'stateUpdate' messages
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import {
@@ -506,6 +506,7 @@ export default function ExplorationView() {
     }
   };
 
+  // ─── HANDLE WEBSOCKET MESSAGES (FIXED) ────────────────────────────
   const handleWebSocketMessage = (data: any) => {
     switch (data.type) {
       case 'explorationRoomCreated':
@@ -539,6 +540,68 @@ export default function ExplorationView() {
         }
         addLog(`🌐 Players: ${data.players.map((p: any) => p.name).join(', ')}`);
         break;
+
+      // ─── NEW: Handle 'joined' message from DO ────────────────────
+      case 'joined': {
+        const state = data.state;
+        if (!state) break;
+        // Set players from state if available
+        if (state.players) {
+          setPlayers(state.players);
+          setMyPlayerIndex(state.players.findIndex((p: any) => p.id === user?.id));
+          const isHost = state.hostId === user?.id;
+          setIsHost(isHost);
+        }
+        // If there's a placeId, we are already in exploration
+        if (state.placeId) {
+          const placeData = explorationPlaces.find(p => p.id === state.placeId);
+          if (placeData) {
+            setSelectedPlace(placeData);
+            setSelectedDifficulty(state.difficulty || 'Normal');
+            setIdentityStates(state.identityStates || []);
+            setEnemies(state.enemies || []);
+            setTurn(state.turn || 'player');
+            setActiveIdentityIndex(state.activeIdentityIndex || 0);
+            setClashData(state.clashData || null);
+            setLog(state.log || ['⚔️ Exploration in progress...']);
+            setPhase('exploring');
+            setRoomPhase('exploring');
+            // Also set wave index if available
+            if (state.currentWaveIndex !== undefined) setCurrentWaveIndex(state.currentWaveIndex);
+            if (state.totalEnemiesDefeated !== undefined) setTotalEnemiesDefeated(state.totalEnemiesDefeated);
+          }
+        } else {
+          // No place selected yet -> go to place select
+          setRoomPhase('placeSelect');
+          setIsHost(state.hostId === user?.id || false);
+          setIsWaitingForHost(false);
+          addLog(`🌐 Joined room. Players: ${(state.players || []).map((p: any) => p.name).join(', ')}`);
+        }
+        break;
+      }
+
+      // ─── NEW: Handle 'stateUpdate' messages (broadcast) ──────────
+      case 'stateUpdate': {
+        const state = data.state;
+        if (!state) break;
+        // Update everything from state
+        if (state.players) setPlayers(state.players);
+        if (state.identityStates) setIdentityStates(state.identityStates);
+        if (state.enemies) setEnemies(state.enemies);
+        if (state.turn) setTurn(state.turn);
+        if (state.activeIdentityIndex !== undefined) setActiveIdentityIndex(state.activeIdentityIndex);
+        if (state.clashData) setClashData(state.clashData);
+        if (state.log) setLog(state.log);
+        if (state.phase === 'victory') {
+          setPhase('victory');
+          setIsCombatFinished(true);
+          if (state.finalScore !== undefined) setFinalScore(state.finalScore);
+        } else if (state.phase === 'defeat') {
+          setPhase('defeat');
+          setIsCombatFinished(true);
+        }
+        break;
+      }
 
       case 'explorationStarted':
         const placeData = explorationPlaces.find(p => p.id === data.placeId);
@@ -614,6 +677,8 @@ export default function ExplorationView() {
     setIsHost(true);
     setRoomPhase('placeSelect');
     connectWebSocket(roomId);
+    // Show the room code immediately
+    addLog(`🌐 Room created. Code: ${roomId}`);
   };
 
   const joinRoom = (roomId: string) => {
