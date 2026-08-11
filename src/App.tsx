@@ -1,4 +1,4 @@
-// App.tsx – with Movesets tab and Blood Lunacy
+// App.tsx – with Movesets tab, Blood Lunacy, and Global Chat
 import { useEffect, useState } from 'react';
 import useGameStore, { TAB_UNLOCK_LEVELS, TAB_UNLOCK_LABELS } from './store/gameStore';
 import StoryView from './components/StoryView';
@@ -22,7 +22,10 @@ import { identities } from './data/identities';
 import DepartmentView from './components/DepartmentView';
 import ExplorationView from './components/ExplorationView';
 import ReceptionMode from './components/ReceptionMode';
-import MovesetTab from './components/MovesetTab'; // new
+import MovesetTab from './components/MovesetTab';
+
+// ✅ Import GlobalChat (will be rendered globally)
+import GlobalChat from './components/GlobalChat';
 
 type Tab = 'story' | 'gacha' | 'identities' | 'weapons' | 'ego-gifts' | 'daily' | 'competitive' | 'shardShop' | 'department' | 'exploration' | 'duel' | 'movesets';
 
@@ -36,7 +39,7 @@ const TAB_UNLOCK_KEY: Partial<Record<Tab, keyof typeof TAB_UNLOCK_LEVELS>> = {
   department: 'department',
   exploration: 'exploration',
   duel: 'duel',
-  movesets: 'movesets', // added
+  movesets: 'movesets',
 };
 
 const TAB_TUTORIAL_KEY: Partial<Record<Tab, string>> = {
@@ -50,7 +53,7 @@ const TAB_TUTORIAL_KEY: Partial<Record<Tab, string>> = {
   department: 'department',
   exploration: 'exploration',
   duel: 'duel',
-  movesets: 'movesets', // added (you may want to add tutorial steps)
+  movesets: 'movesets',
 };
 
 export default function App() {
@@ -178,7 +181,7 @@ export default function App() {
     { id: 'department', label: 'DEPARTMENT', icon: '🏛️' },
     { id: 'exploration', label: 'EXPLORATION', icon: '🗺️' },
     { id: 'duel', label: 'DUEL', icon: '⚔️' },
-    { id: 'movesets', label: 'MOVESETS', icon: '📚' }, // new
+    { id: 'movesets', label: 'MOVESETS', icon: '📚' },
   ];
 
   if (showShardShop) {
@@ -482,6 +485,9 @@ export default function App() {
       <footer className="border-t border-gray-800 py-4 text-center text-xs text-gray-600 font-mono tracking-wider">
         QLIPHOTH: ECLIPSE PROTOCOL — v1.5.0 "CHAOS AWAKENS" — Signed in as {displayName}{user.isAdmin && ' · ADMIN'}
       </footer>
+
+      {/* ✅ Global Chat – always visible, fixed position */}
+      <GlobalChat />
 
       {!user.isAdmin && pendingTutorialKey && TAB_UNLOCK_LABELS[pendingTutorialKey as keyof typeof TAB_UNLOCK_LABELS] && !currentTutorialStep && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
