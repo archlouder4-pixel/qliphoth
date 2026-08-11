@@ -89,4 +89,4 @@ export const ranks = {
             video: "https://youtu.be/C2n6Xu9oc8c"
         }
     ]
-};
+];
