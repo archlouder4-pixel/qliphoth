@@ -2,6 +2,8 @@
 // Added: custom room codes, global chat (visible only in co‑op)
 // FIX: selectedAbnoId instead of selectedAbnoIndex to avoid falsy-zero and index mismatch bugs.
 // FIX: Bullet capacity enforcement and Lunacy cost.
+// FIX: disbandRoom() no longer calls sendAction() in solo mode (was throwing a false
+//      "WebSocket is not connected" alert since there's no socket in solo play).
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -478,13 +480,20 @@ export default function DepartmentView() {
   };
 
   // ─── Disband room ──────────────────────────────────────────────────
+  // ✅ FIX: only send the WebSocket action when actually in co-op. Previously this
+  // called sendAction() unconditionally, which fired a false "WebSocket is not
+  // connected" alert whenever a solo (non-coop) facility was disbanded, since
+  // wsRef.current is never opened in solo mode.
   const disbandRoom = () => {
     if (facility.managerId !== user?.id) {
       alert('Only the manager can disband the facility.');
       return;
     }
 
-    sendAction('disbandDepartmentRoom', {});
+    if (isCoop) {
+      sendAction('disbandDepartmentRoom', {});
+    }
+
     useGameStore.setState((state) => ({
       facility: {
         ...state.facility,
@@ -1691,6 +1700,34 @@ export default function DepartmentView() {
     const capacity = Math.floor(10 * (facility.bulletCapacityMultiplier || 1));
     const costPerBatch = 10; // Lunacy per 10 bullets
 
+    // ✅ FIX: extracted so the button actually deducts Lunacy and adds bullets,
+    // syncing over the socket in co-op. Previously the onClick body was empty
+    // (left as comments) so the "+10" button did nothing at all.
+    const purchaseBullets = (key: string, count: number) => {
+      const current = facility.bullets?.[key] || 0;
+      if (current >= capacity) {
+        alert(`⚠️ Capacity reached for ${key} bullets (${capacity})`);
+        return;
+      }
+      if (lunacy < costPerBatch) {
+        alert(`❌ Not enough Lunacy (need ${costPerBatch}, have ${lunacy})`);
+        return;
+      }
+      const added = Math.min(count, capacity - current);
+      useGameStore.setState((s) => ({
+        lunacy: s.lunacy - costPerBatch,
+        facility: {
+          ...s.facility,
+          bullets: {
+            ...s.facility.bullets,
+            [key]: (s.facility.bullets?.[key] || 0) + added,
+          },
+        },
+      }));
+      addFacilityLog(`${getDisplayName(user)} purchased ${added} ${key} bullets`, 'success');
+      if (isCoop) sendAction('addBullets', { type: key, amount: added });
+    };
+
     return (
       <div className="border border-gray-700 rounded p-4">
         <div className="flex items-center justify-between mb-4">
@@ -1709,44 +1746,7 @@ export default function DepartmentView() {
                 <span className="text-white">{b.emoji} {b.label}</span>
                 <span className="text-cyan-400 font-mono">{count}/{capacity}</span>
                 <button
-                  onClick={() => {
-                    if (atCapacity) {
-                      alert(`⚠️ Capacity reached for ${b.label} bullets (${capacity})`);
-                      return;
-                    }
-                    if (!canAfford) {
-                      alert(`❌ Not enough Lunacy (need ${costPerBatch}, have ${lunacy})`);
-                      return;
-                    }
-                    // Deduct cost and add bullets
-                    // If your store's addBullets doesn't deduct Lunacy, you need to implement that.
-                    // This example assumes the store handles cost; if not, you'd call a custom action.
-                    // For now, we'll just add and assume the store uses the cost.
-                    // In a proper implementation, you'd have a dedicated "purchaseBullets" action.
-                    // But since the UI is the only entry point, we can just call addBullets
-                    // and deduct lunacy here.
-                    // However, the store's addBullets may not touch lunacy. We'll add a separate deduction.
-                    // For simplicity, we'll combine: use a custom function that reduces lunacy and adds bullets.
-                    // Since we don't have that, we'll just do it manually in this component.
-                    // But it's better to move this logic to the store. For this fix, I'll add a direct
-                    // state update for lunacy and bullets, but that's not safe for co-op.
-                    // Since the user may not have a store action, I'll assume the store has a purchaseBullets.
-                    // If not, you can create one.
-                    // I'll add a comment to remind to implement a proper store action.
-                    // For now, I'll just call addBullets and update lunacy manually.
-                    // This is not ideal; you should refactor the store.
-                    // But given the user wants the fix, I'll implement a simple version.
-                    // I'll call addBullets and deduct lunacy.
-                    // However, addBullets doesn't deduct lunacy, so we need to do that.
-                    // Also, for co-op we need to sync.
-                    // I'll add a function to handle purchase that updates both.
-                    // For the purpose of this file, I'll create a local purchaseBullets function.
-                    // Actually, it's better to modify the store. Since the user asked for the full file,
-                    // we can keep it simple and just show the fix; they can adapt.
-                    // I'll just add a console warning and use the existing addBullets.
-                    // But we must prevent overspending.
-                    // I'll add a local function that updates both.
-                  }}
+                  onClick={() => purchaseBullets(b.key, 10)}
                   disabled={atCapacity || !canAfford}
                   className={`text-xs px-2 py-0.5 rounded transition ${
                     atCapacity || !canAfford
