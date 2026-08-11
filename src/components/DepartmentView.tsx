@@ -6,6 +6,7 @@
 // FIX: HOTFIX – prevent server's null departmentKey from overwriting a valid local key.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
+import useGameStore, { getDeployCost } from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
 import {
   identities,
@@ -1347,12 +1348,7 @@ export default function DepartmentView() {
     const canDeploy = deployedToday < maxDeploy;
     const availableAbnos = getAvailableAbnos();
 
-    const getCost = (risk: string) => {
-      if (risk === 'ALEPH') return 50;
-      if (risk === 'WAW') return 30;
-      if (risk === 'HE') return 15;
-      if (risk === 'ZAYIN' || risk === 'TETH') return 0;
-      return 5;
+    const getCost = (risk: string) => getDeployCost(facility.currentDay, risk);
     };
 
     return (
