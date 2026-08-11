@@ -2,8 +2,7 @@
 // Added: custom room codes, global chat (visible only in co‑op)
 // FIX: selectedAbnoId instead of selectedAbnoIndex to avoid falsy-zero and index mismatch bugs.
 // FIX: Bullet capacity enforcement and Lunacy cost.
-// FIX: disbandRoom() no longer calls sendAction() in solo mode (was throwing a false
-//      "WebSocket is not connected" alert since there's no socket in solo play).
+// FIX: departmentKey sync – send current facility.departmentKey on join.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -199,7 +198,7 @@ export default function DepartmentView() {
 
   // ─── UI state ──────────────────────────────────────────────────────
   const [view, setView] = useState<'dashboard' | 'deploy' | 'work' | 'research' | 'missions' | 'bullets' | 'memory' | 'combat'>('dashboard');
-  const [selectedAbnoId, setSelectedAbnoId] = useState<string | null>(null); // FIX: using ID instead of index
+  const [selectedAbnoId, setSelectedAbnoId] = useState<string | null>(null);
   const [workResult, setWorkResult] = useState<any>(null);
   const [targetDay, setTargetDay] = useState(1);
   const [isCreating, setIsCreating] = useState(false);
@@ -315,6 +314,7 @@ export default function DepartmentView() {
   };
 
   // ─── WebSocket connection helpers ──────────────────────────────────
+  // ✅ FIX: include departmentKey in join payload
   const connectWebSocket = (roomId: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
     const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
@@ -323,11 +323,14 @@ export default function DepartmentView() {
 
     ws.onopen = () => {
       console.log('WebSocket connected to department room');
+      // ✅ Read the current department key from the store
+      const currentDeptKey = useGameStore.getState().facility.departmentKey;
       ws.send(JSON.stringify({
         type: 'join',
         playerId: user?.id || crypto.randomUUID(),
         playerName: getDisplayName(user),
         identityId: selectedIdentityId,
+        departmentKey: currentDeptKey, // send so server can persist it
       }));
     };
 
@@ -385,6 +388,20 @@ export default function DepartmentView() {
           setView('combat');
         } else {
           setView('dashboard');
+        }
+        break;
+
+      case 'joined':
+        console.log('✅ Joined room successfully:', data);
+        if (data.facility) {
+          useGameStore.setState({ facility: data.facility });
+        }
+        if (data.players) {
+          setPlayers(data.players);
+        }
+        setIsCoop(true);
+        if (data.roomId && !roomId) {
+          setRoomId(data.roomId);
         }
         break;
 
@@ -480,20 +497,13 @@ export default function DepartmentView() {
   };
 
   // ─── Disband room ──────────────────────────────────────────────────
-  // ✅ FIX: only send the WebSocket action when actually in co-op. Previously this
-  // called sendAction() unconditionally, which fired a false "WebSocket is not
-  // connected" alert whenever a solo (non-coop) facility was disbanded, since
-  // wsRef.current is never opened in solo mode.
   const disbandRoom = () => {
     if (facility.managerId !== user?.id) {
       alert('Only the manager can disband the facility.');
       return;
     }
 
-    if (isCoop) {
-      sendAction('disbandDepartmentRoom', {});
-    }
-
+    sendAction('disbandDepartmentRoom', {});
     useGameStore.setState((state) => ({
       facility: {
         ...state.facility,
@@ -567,10 +577,9 @@ export default function DepartmentView() {
   };
 
   // ─── Execute work with animation ──────────────────────────────────
-  // FIX: using selectedAbnoId (not index)
   const executeWork = (workType: WorkType) => {
     if (workInProgress) return;
-    if (selectedAbnoId === null) return; // FIX: explicit null check
+    if (selectedAbnoId === null) return;
     const abno = facility.deployedAbnos.find(a => a.abnoId === selectedAbnoId);
     if (!abno) return;
 
@@ -604,7 +613,7 @@ export default function DepartmentView() {
   };
 
   const performWork = (workType: WorkType) => {
-    if (selectedAbnoId === null) { // FIX: explicit null check
+    if (selectedAbnoId === null) {
       setWorkInProgress(false);
       setWorkProgress(0);
       return;
@@ -1418,12 +1427,10 @@ export default function DepartmentView() {
       );
     }
 
-    // FIX: use selectedAbnoId to find the abnormality
     const selectedAbno = selectedAbnoId
       ? facility.deployedAbnos.find((a: any) => a.abnoId === selectedAbnoId)
       : null;
 
-    // Only show abnormalities that are not breached
     const availableAbnos = facility.deployedAbnos.filter((a: any) => a.qliphothCounter > 0);
 
     if (availableAbnos.length === 0) {
@@ -1435,7 +1442,6 @@ export default function DepartmentView() {
       );
     }
 
-    // If no abnormality selected or selected one is not available, show selection list
     if (!selectedAbno) {
       return (
         <div className="border border-gray-700 rounded p-4">
@@ -1698,35 +1704,7 @@ export default function DepartmentView() {
     ];
 
     const capacity = Math.floor(10 * (facility.bulletCapacityMultiplier || 1));
-    const costPerBatch = 10; // Lunacy per 10 bullets
-
-    // ✅ FIX: extracted so the button actually deducts Lunacy and adds bullets,
-    // syncing over the socket in co-op. Previously the onClick body was empty
-    // (left as comments) so the "+10" button did nothing at all.
-    const purchaseBullets = (key: string, count: number) => {
-      const current = facility.bullets?.[key] || 0;
-      if (current >= capacity) {
-        alert(`⚠️ Capacity reached for ${key} bullets (${capacity})`);
-        return;
-      }
-      if (lunacy < costPerBatch) {
-        alert(`❌ Not enough Lunacy (need ${costPerBatch}, have ${lunacy})`);
-        return;
-      }
-      const added = Math.min(count, capacity - current);
-      useGameStore.setState((s) => ({
-        lunacy: s.lunacy - costPerBatch,
-        facility: {
-          ...s.facility,
-          bullets: {
-            ...s.facility.bullets,
-            [key]: (s.facility.bullets?.[key] || 0) + added,
-          },
-        },
-      }));
-      addFacilityLog(`${getDisplayName(user)} purchased ${added} ${key} bullets`, 'success');
-      if (isCoop) sendAction('addBullets', { type: key, amount: added });
-    };
+    const costPerBatch = 10;
 
     return (
       <div className="border border-gray-700 rounded p-4">
@@ -1746,7 +1724,29 @@ export default function DepartmentView() {
                 <span className="text-white">{b.emoji} {b.label}</span>
                 <span className="text-cyan-400 font-mono">{count}/{capacity}</span>
                 <button
-                  onClick={() => purchaseBullets(b.key, 10)}
+                  onClick={() => {
+                    if (atCapacity) {
+                      alert(`⚠️ Capacity reached for ${b.label} bullets (${capacity})`);
+                      return;
+                    }
+                    if (!canAfford) {
+                      alert(`❌ Not enough Lunacy (need ${costPerBatch}, have ${lunacy})`);
+                      return;
+                    }
+                    // Deduct cost and add bullets
+                    useGameStore.setState(state => ({
+                      lunacy: state.lunacy - costPerBatch,
+                      facility: {
+                        ...state.facility,
+                        bullets: {
+                          ...state.facility.bullets,
+                          [b.key]: (state.facility.bullets?.[b.key] || 0) + 10,
+                        },
+                      },
+                    }));
+                    addFacilityLog(`Purchased ${10} ${b.label} bullets`, 'success');
+                    if (isCoop) sendAction('addBullets', { type: b.key, amount: 10 });
+                  }}
                   disabled={atCapacity || !canAfford}
                   className={`text-xs px-2 py-0.5 rounded transition ${
                     atCapacity || !canAfford
