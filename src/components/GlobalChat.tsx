@@ -1,5 +1,6 @@
 // src/components/GlobalChat.tsx
 import React, { useState, useEffect, useRef } from 'react';
+import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
 import { getDisplayName } from '../auth/discord';
 
@@ -13,40 +14,52 @@ interface ChatMessage {
 
 export default function GlobalChat() {
   const { user } = useAuth();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { chatMessages, chatUnread, chatOpen, addChatMessage, markChatRead, toggleChat, setChatOpen } = useGameStore();
   const [input, setInput] = useState('');
-  const [isOpen, setIsOpen] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
 
-  const connect = () => {
+  // ─── Connect WebSocket ──────────────────────────────────────────────
+  const connectWebSocket = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+
     const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
     const ws = new WebSocket(`wss://${wsUrl}/global`);
     wsRef.current = ws;
 
     ws.onopen = () => {
       console.log('Global chat connected');
+      setIsConnected(true);
+      setReconnectAttempts(0);
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'chat') {
-          setMessages(prev => [...prev, { user: data.user, text: data.text, timestamp: data.timestamp }]);
-          // Keep only last 50 messages to avoid memory issues
-          if (messages.length > 50) setMessages(prev => prev.slice(-50));
+          addChatMessage({
+            user: data.user,
+            text: data.text,
+            timestamp: data.timestamp,
+          });
         }
       } catch (err) {
-        console.error('Chat parse error:', err);
+        console.error('Failed to parse chat message:', err);
       }
     };
 
     ws.onclose = () => {
       console.log('Global chat closed, reconnecting...');
+      setIsConnected(false);
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = setTimeout(() => connect(), 3000);
+      const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts));
+      reconnectTimeoutRef.current = setTimeout(() => {
+        setReconnectAttempts(prev => prev + 1);
+        connectWebSocket();
+      }, delay);
     };
 
     ws.onerror = (err) => {
@@ -54,84 +67,129 @@ export default function GlobalChat() {
     };
   };
 
-  useEffect(() => {
-    connect();
-    return () => {
-      if (wsRef.current) wsRef.current.close();
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-    };
-  }, []);
-
-  const sendMessage = () => {
-    if (!input.trim()) return;
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      alert('Chat not connected.');
-      return;
+  // ─── Disconnect ──────────────────────────────────────────────────────
+  const disconnectWebSocket = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
     }
-    wsRef.current.send(JSON.stringify({
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  };
+
+  // ─── Send message ────────────────────────────────────────────────────
+  const sendMessage = () => {
+    if (!input.trim() || !isConnected) return;
+    wsRef.current?.send(JSON.stringify({
       type: 'chat',
-      user: user ? getDisplayName(user) : 'Guest',
+      user: getDisplayName(user),
       text: input.trim(),
     }));
     setInput('');
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') sendMessage();
-  };
-
-  // Auto-scroll to bottom on new messages
+  // ─── Auto-scroll ─────────────────────────────────────────────────────
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
-  const displayName = user ? getDisplayName(user) : 'Guest';
+  // ─── Mark read when chat opens ──────────────────────────────────────
+  useEffect(() => {
+    if (chatOpen && chatUnread > 0) {
+      markChatRead();
+    }
+  }, [chatOpen]);
+
+  // ─── Connect on mount ──────────────────────────────────────────────
+  useEffect(() => {
+    connectWebSocket();
+    return () => disconnectWebSocket();
+  }, []);
+
+  // ─── Reconnect on visibility change ────────────────────────────────
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !wsRef.current) {
+        connectWebSocket();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   return (
     <div className="fixed bottom-4 right-4 z-50">
-      {/* Chat toggle button */}
+      {/* ─── Toggle Button with Badge ──────────────────────────────── */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-12 h-12 rounded-full bg-cyan-500 text-white shadow-lg hover:bg-cyan-600 transition flex items-center justify-center text-2xl"
-        title="Global Chat"
+        onClick={toggleChat}
+        className="relative bg-cyan-600 hover:bg-cyan-700 text-white p-3 rounded-full shadow-lg transition-all duration-200"
       >
-        💬
+        <span className="text-xl">💬</span>
+        {chatUnread > 0 && (
+          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+            {chatUnread > 99 ? '99+' : chatUnread}
+          </span>
+        )}
+        {!isConnected && (
+          <span className="absolute -bottom-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-gray-900" />
+        )}
+        {isConnected && (
+          <span className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-gray-900" />
+        )}
       </button>
 
-      {/* Chat panel */}
-      {isOpen && (
-        <div className="absolute bottom-16 right-0 w-80 h-96 bg-gray-900 border border-gray-700 rounded-lg shadow-2xl flex flex-col overflow-hidden">
-          <div className="px-4 py-2 bg-gray-800 border-b border-gray-700 flex justify-between items-center">
-            <span className="text-sm font-bold text-cyan-400">💬 Global Chat</span>
-            <button onClick={() => setIsOpen(false)} className="text-gray-400 hover:text-white">✕</button>
+      {/* ─── Chat Panel ──────────────────────────────────────────────── */}
+      {chatOpen && (
+        <div className="absolute bottom-16 right-0 w-80 sm:w-96 h-[400px] bg-gray-900 border border-gray-700 rounded-lg shadow-2xl flex flex-col overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-800/50">
+            <span className="text-sm font-bold text-cyan-400">
+              💬 Global Chat
+              {!isConnected && <span className="ml-2 text-xs text-red-400">(disconnected)</span>}
+            </span>
+            <button
+              onClick={() => setChatOpen(false)}
+              className="text-gray-400 hover:text-white transition"
+            >
+              ✕
+            </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-1 text-sm">
-            {messages.length === 0 && (
-              <p className="text-gray-500 text-center text-xs">No messages yet. Be the first!</p>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {chatMessages.length === 0 ? (
+              <p className="text-gray-500 text-sm text-center mt-4">No messages yet. Say hello! 👋</p>
+            ) : (
+              chatMessages.map((msg, i) => (
+                <div key={i} className="text-sm">
+                  <span className="text-cyan-400 font-bold">{msg.user}:</span>
+                  <span className="text-gray-300 ml-2 break-words">{msg.text}</span>
+                  <span className="text-[10px] text-gray-500 ml-2">
+                    {new Date(msg.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))
             )}
-            {messages.map((msg, i) => (
-              <div key={i} className="border-b border-gray-800 pb-1">
-                <span className="text-cyan-400 font-bold">{msg.user}</span>
-                <span className="text-gray-500 text-xs ml-2">{new Date(msg.timestamp).toLocaleTimeString()}</span>
-                <p className="text-gray-300 break-words">{msg.text}</p>
-              </div>
-            ))}
             <div ref={messagesEndRef} />
           </div>
-          <div className="p-2 bg-gray-800 border-t border-gray-700 flex gap-2">
+
+          {/* Input */}
+          <div className="border-t border-gray-700 p-2 flex gap-2 bg-gray-800/30">
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={`Chat as ${displayName}`}
-              className="flex-1 bg-gray-700 text-white border border-gray-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-cyan-400"
+              onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+              placeholder={isConnected ? 'Type a message...' : 'Reconnecting...'}
+              disabled={!isConnected}
+              className="flex-1 bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-cyan-400 disabled:opacity-50"
             />
             <button
               onClick={sendMessage}
-              className="px-3 py-1 bg-cyan-500 text-white rounded hover:bg-cyan-600 transition text-sm"
+              disabled={!isConnected || !input.trim()}
+              className="bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded text-sm transition"
             >
               Send
             </button>
