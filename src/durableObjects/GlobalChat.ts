@@ -10,6 +10,22 @@ export interface ChatMessage {
 export class GlobalChat extends DurableObject {
   private messages: ChatMessage[] = [];
   private maxMessages = 100;
+  private storageKey = 'chatMessages';
+
+  constructor(ctx: DurableObjectState, env: any) {
+    super(ctx, env);
+    // Load persisted messages on instantiation
+    ctx.blockConcurrencyWhile(async () => {
+      const stored = await ctx.storage.get<ChatMessage[]>(this.storageKey);
+      if (stored && stored.length > 0) {
+        this.messages = stored;
+      }
+    });
+  }
+
+  private async saveMessages() {
+    await this.ctx.storage.put(this.storageKey, this.messages);
+  }
 
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade') === 'websocket') {
@@ -41,17 +57,18 @@ export class GlobalChat extends DurableObject {
         this.messages = this.messages.slice(-this.maxMessages);
       }
 
-      // ✅ FIX: ctx.getWebSockets() returns a plain WebSocket[], not [key, value]
-      // pairs. Destructuring each entry as [otherWs, _] threw a TypeError on the
-      // first iteration, which silently aborted this whole handler before any
-      // broadcast (or even an echo back to the sender) went out.
+      // ✅ Persist to storage so history survives hibernation
+      await this.saveMessages();
+
+      // ✅ Broadcast to all connected WebSockets (fixed: direct iteration)
+      const payload = JSON.stringify({ type: 'chat', ...msg });
       for (const otherWs of this.ctx.getWebSockets()) {
-        otherWs.send(JSON.stringify({ type: 'chat', ...msg }));
+        otherWs.send(payload);
       }
     }
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    // No cleanup needed
+    // No cleanup needed – messages remain in storage
   }
 }
