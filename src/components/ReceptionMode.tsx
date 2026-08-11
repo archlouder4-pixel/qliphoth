@@ -13,7 +13,7 @@ import {
 import {
   buildTransformedSkills,
   getTransformationInfo,
-} from '../data/identitiesPassives';
+} from '../data/identitiesPassives'; // ✅ FIX: import these
 import { weapons, canEquipWeapon } from '../data/weapons';
 import { egoGifts } from '../data/egoGifts';
 import { applyWeaponPassive } from '../data/weaponPassives';
@@ -30,6 +30,7 @@ interface ReceptionModeProps {
   initialLosses?: number;
 }
 
+// ─── Rank definitions ──────────────────────────────────────────────
 const RANK_GROUPS = [
   { name: 'Manager', minScore: 0, color: '#4CAF50', nextRank: 'Professional', nextThreshold: 401 },
   { name: 'Professional', minScore: 401, color: '#2196F3', nextRank: 'Librarian', nextThreshold: 801 },
@@ -57,6 +58,7 @@ function getRankColor(rank: string): string {
   return found ? found.color : '#A9A9A9';
 }
 
+// ─── Styles ─────────────────────────────────────────────────────────
 const PGR_STYLES = {
   bgPrimary: 'bg-[#070a14]',
   bgSecondary: 'bg-[#0c1020]',
@@ -538,6 +540,7 @@ export default function ReceptionMode({
     const trigger = identity.transformationTrigger || 'none';
     const hasUltimate = identity.skills.some(s => s.type === 'ego' || s.isUltimate);
 
+    // ─── Build base skills ────────────────────────────────────────────
     const baseSkills = identity.skills.map((skill, idx) => {
       const lvl = owned.skillLevels[idx] || 1;
       const power = skill.basePower + skill.powerGrowth * (lvl - 1);
@@ -553,22 +556,20 @@ export default function ReceptionMode({
       };
     });
 
+    // ─── Build transformed skills using the helper ────────────────────
     let transformedSkills: any[] = [];
     if (identity.transformedSkills && identity.transformedSkills.length > 0) {
-      transformedSkills = identity.transformedSkills.map((skill) => {
-        const lvl = 1;
-        const power = skill.basePower + skill.powerGrowth * (lvl - 1);
-        const coins = skill.coinGrowth > 0 ? skill.baseCoins + Math.floor((lvl - 1) / skill.coinGrowth) : skill.baseCoins;
-        return {
-          ...skill,
-          power,
-          coins,
-          level: lvl,
-          isEgo: skill.type === 'ego',
-          isTransformed: true,
-          isUltimate: skill.isUltimate || false,
-        };
-      });
+      // Use buildTransformedSkills to properly create skills with correct stats
+      const transformed = buildTransformedSkills(identity, identity.element, identity.baseInfusion || 'Slash');
+      transformedSkills = transformed.map((skill) => ({
+        ...skill,
+        isEgo: skill.type === 'ego',
+        isTransformed: true,
+        isUltimate: skill.isUltimate || false,
+        level: 1,
+        coins: skill.coins || 1,
+        power: skill.power || 0,
+      }));
     }
 
     const classCategory = getClassCategory(identityId);
@@ -609,11 +610,10 @@ export default function ReceptionMode({
     };
   };
 
-  // ─── FIXED "Find Match" with userId ──────────────────────────────
+  // ─── Find Match with userId ──────────────────────────────────────
   const findMatch = () => {
     if (queued) return;
 
-    // Generate or retrieve persistent user ID
     let userId = localStorage.getItem('reception_userId');
     if (!userId) {
       userId = crypto.randomUUID();
@@ -627,7 +627,6 @@ export default function ReceptionMode({
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           const playerData = buildPlayerData();
           if (playerData) {
-            // Attach userId to the payload so the server can identify the player
             playerData.userId = userId;
             sendAction('findMatch', playerData);
             addLog('[SYSTEM] Finding match...');
@@ -642,7 +641,6 @@ export default function ReceptionMode({
 
     const playerData = buildPlayerData();
     if (!playerData) return;
-    // Attach userId
     playerData.userId = userId;
     sendAction('findMatch', playerData);
     addLog('[SYSTEM] Finding match...');
