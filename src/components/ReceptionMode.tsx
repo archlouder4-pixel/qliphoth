@@ -165,12 +165,6 @@ export default function ReceptionMode({
   const [ultBarValue, setUltBarValue] = useState(0);
   const [passiveActivating, setPassiveActivating] = useState(false);
   const [weaponError, setWeaponError] = useState<string | null>(null);
-  // ─── FIX (manual continue): the clash screen no longer clears itself on a
-  // timer — it now waits for this player to press Continue AND for the
-  // server to confirm the opponent has too. hasAckedClash tracks whether
-  // *this* player has already pressed it for the clash currently on screen,
-  // so the button can disable itself and show a "waiting" state instead of
-  // being pressable repeatedly. ───────────────────────────────────────────
   const [hasAckedClash, setHasAckedClash] = useState(false);
   const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting');
 
@@ -219,9 +213,6 @@ export default function ReceptionMode({
     setPassiveActivating(true);
     addLogRef.current(`[${identity.name}] Passive awakening!`);
 
-    // ─── FIX: this already used a real array index (Math.random() * length),
-    // so the passive-trigger path itself was fine. The soft lock came from
-    // the manual-select path below via indexOf(); see the render section.
     const randomIdx = Math.floor(Math.random() * me.skills.length);
     setSelectedSkill(randomIdx);
 
@@ -365,9 +356,6 @@ export default function ReceptionMode({
             setIsSubmitting(false);
             setPassiveActivating(false);
             setShowClashResult(true);
-            // ─── FIX (manual continue): this is a brand-new clash result, so
-            // this player hasn't pressed Continue on it yet — reset the flag
-            // even if it was left true from the previous clash. ────────────
             setHasAckedClash(false);
           }
         } else {
@@ -376,11 +364,6 @@ export default function ReceptionMode({
           setHasAckedClash(false);
           if (state.p1SkillIdx === null && state.p2SkillIdx === null) {
             setPassiveActivating(false);
-            // ─── FIX: if the server had to reset a stuck round (invalid index
-            // safety net in resolveClash), both skill indices come back to null
-            // without a clashResult and without a winner. Make sure the client
-            // also clears its own "submitted" flags so the UI returns to a
-            // selectable state instead of staying frozen on "waiting". ────────
             setIsSubmitting(false);
             setSelectedSkill(null);
           }
@@ -409,12 +392,6 @@ export default function ReceptionMode({
       }
 
       case 'error': {
-        // ─── FIX: an 'error' from the server (e.g. "Invalid skill selection")
-        // used to only pop an alert and clear `queued`. If it arrived mid-combat
-        // (a rejected skill pick) the client's isSubmitting/selectedSkill flags
-        // were never cleared, which could also present as a stuck "submitted"
-        // UI even though the server correctly rejected the pick. Clear combat
-        // submission state too so the player can simply pick again. ──────────
         setQueued(false);
         setIsSubmitting(false);
         setPassiveActivating(false);
@@ -457,14 +434,6 @@ export default function ReceptionMode({
   };
   selectSkillRef.current = selectSkill;
 
-  // ─── FIX (manual continue): this used to just locally hide the clash
-  // screen (setShowClashResult(false)) and reset local flags — the server
-  // was already advancing the round on its own timer regardless of whether
-  // the player had even looked at the result yet. Now this only tells the
-  // server "I'm ready"; the clash screen stays up (showClashResult stays
-  // true, driven by roomState.clashResult) until the server confirms BOTH
-  // players have pressed Continue and sends the next-round/match-result
-  // state. ───────────────────────────────────────────────────────────────
   const handleContinue = () => {
     if (hasAckedClash) return;
     setHasAckedClash(true);
@@ -640,22 +609,29 @@ export default function ReceptionMode({
     };
   };
 
-  // ─── FIXED "Find Match" ──────────────────────────────────────────
+  // ─── FIXED "Find Match" with userId ──────────────────────────────
   const findMatch = () => {
-    if (queued) return; // already searching — don't spam the server
+    if (queued) return;
 
-    // Ensure WebSocket is connected
+    // Generate or retrieve persistent user ID
+    let userId = localStorage.getItem('reception_userId');
+    if (!userId) {
+      userId = crypto.randomUUID();
+      localStorage.setItem('reception_userId', userId);
+    }
+
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       addLog('[SYSTEM] Connecting to server...');
       connectWebSocket();
-      // Retry after connection
       setTimeout(() => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           const playerData = buildPlayerData();
           if (playerData) {
+            // Attach userId to the payload so the server can identify the player
+            playerData.userId = userId;
             sendAction('findMatch', playerData);
             addLog('[SYSTEM] Finding match...');
-            setQueued(true); // optimistic — server 'queued'/'matchCancelled' will correct this if needed
+            setQueued(true);
           }
         } else {
           addLog('[SYSTEM] Failed to connect to server.');
@@ -663,18 +639,21 @@ export default function ReceptionMode({
       }, 500);
       return;
     }
+
     const playerData = buildPlayerData();
     if (!playerData) return;
+    // Attach userId
+    playerData.userId = userId;
     sendAction('findMatch', playerData);
     addLog('[SYSTEM] Finding match...');
-    setQueued(true); // optimistic — server 'queued'/'matchCancelled' will correct this if needed
+    setQueued(true);
   };
 
   const cancelMatch = () => {
     if (!wsRef.current) return;
     sendAction('cancelMatch');
     addLog('[SYSTEM] Cancelling search...');
-    setQueued(false); // optimistic — server 'queued' will correct this if the cancel didn't actually go through
+    setQueued(false);
   };
 
   const rankInfo = getRankInfo(initialScore);
@@ -923,9 +902,6 @@ export default function ReceptionMode({
       const isP1 = myPlayerIndexRef.current === 0;
       const iWon = (isP1 && cr.won) || (!isP1 && !cr.won);
       const winnerName = cr.actorName;
-      // ─── FIX (manual continue): the ack state lives on roomState (server is
-      // the source of truth), so both players can see whether the opponent
-      // has pressed Continue yet, not just their own local click. ──────────
       const oppKey = isP1 ? 'p2' : 'p1';
       const opponentAcked = !!roomState.clashAck?.[oppKey];
 
@@ -1149,18 +1125,6 @@ export default function ReceptionMode({
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
                 {(() => {
-                  // ─── FIX: tag every skill with its real position in me.skills
-                  // (__idx) BEFORE filtering, instead of recovering the index later
-                  // via me.skills.indexOf(skill). indexOf() relies on reference
-                  // equality, and returns -1 whenever `skill` isn't the exact same
-                  // object reference found in me.skills — which happened for the
-                  // identity-derived fallback list below and could happen for
-                  // transformed skill objects too. Sending -1 to the server as a
-                  // "selected skill index" caused resolveClash() to fail to find a
-                  // matching skill, which (before the server-side fix) left both
-                  // players permanently stuck on "Skill submitted – waiting for
-                  // opponent" / "Waiting for opponent". Using __idx guarantees a
-                  // valid index is always sent. ─────────────────────────────────
                   let activeSkills = (me.skills || [])
                     .map((s: any, i: number) => ({ ...s, __idx: i }))
                     .filter((s: any) => s.type !== 'class' && s.isTransformed === isTransformed);
