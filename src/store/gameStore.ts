@@ -1,4 +1,4 @@
-// src/store/gameStore.ts – Full file with moveset integration, blood lunacy, and ticket exchange
+// src/store/gameStore.ts – Full file with moveset integration, blood lunacy, ticket exchange, and global chat
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { identities, storyOnlyIdentities, getClassCategories, type Identity, expForLevel } from '../data/identities';
@@ -20,44 +20,37 @@ import { getFirstTutorialStep, getTabTutorialSteps } from '../data/tutorial';
 import { abnormalities } from '../data/abnormalities';
 
 // ── Moveset data ──────────────────────────────────────────────────────
-// ES import from movesets.js
 import { data as movesetsData } from '../data/movesets';
 
-// Define a type for a moveset (enriched with grade/obtainable)
 export interface Moveset {
   name: string;
-  rank: string; // 'ZAYIN' | 'TETH' | 'HE' | 'WAW' | 'ALEPH' | 'WALKIRKSNACHT'
+  rank: string;
   grade?: 'standard' | 'plus' | 'commissioned' | 'esoteric' | 'library' | 'removed';
   obtainable?: boolean;
   code: string;
   video?: string;
 }
 
-// Normalize movesets: add default grade and obtainable if missing
 const movesets: Moveset[] = (movesetsData || []).map((m: any) => ({
   ...m,
   grade: m.grade || 'standard',
   obtainable: m.obtainable !== undefined ? m.obtainable : true,
 }));
 
-// Build a map for quick lookup
 const movesetMap = new Map<string, Moveset>();
 for (const m of movesets) {
   movesetMap.set(m.name, m);
 }
 
-// ── Ticket exchange costs ──────────────────────────────────────────────
 export const TICKET_COSTS = {
-  RANDOM: 250,          // 250 Blood Lunacy for a random ticket
-  WAW: 800,             // 800 for WAW ticket
-  ALEPH: 1500,          // 1500 for ALEPH ticket
-  WALKIRKSNACHT: 3000,  // 3000 for Walkirksnacht ticket (event only)
+  RANDOM: 250,
+  WAW: 800,
+  ALEPH: 1500,
+  WALKIRKSNACHT: 3000,
 };
 
-// ── STORE VERSION ──────────────────────────────────────────────────────
 const STORE_VERSION = 28;
 
-// ── TAB UNLOCK CONSTANTS ──────────────────────────────────────────────
 export const TAB_UNLOCK_LEVELS = {
   gacha: 99,
   identities: 0,
@@ -175,7 +168,6 @@ export const WEAPON_MATERIAL_RATES = [
   { key: 'sync_mats', label: 'Sync Materials', weight: 10.27 },
 ];
 
-// ─── RESONANCE SYSTEM TYPES ──────────────────────────────────────────────
 export type ResonanceType =
   | 'precision_attack'
   | 'tactical_modification'
@@ -448,6 +440,11 @@ export interface GameState {
   // ── Blood Lunacy fields ──────────────────────────────────────────────
   bloodLunacy: number;
   bloodLunacyThreshold: number;
+
+  // ── Chat fields ──────────────────────────────────────────────────────
+  chatMessages: { user: string; text: string; timestamp: number }[];
+  chatUnread: number;
+  chatOpen: boolean;
 }
 
 function generateFloatingGuarantee(): number {
@@ -831,7 +828,6 @@ const INITIAL_STATE: GameState = {
     maxDeployPerDay: 1,
     unlockedResearch: [],
     completedMissions: [],
-    // ✅ FIX: Initialize missionProgress with totalDeployments
     missionProgress: { worksCompleted: 0, totalDeployments: 0 },
     completedCoreSuppressions: [],
     suppressionRewards: [],
@@ -852,7 +848,7 @@ const INITIAL_STATE: GameState = {
     history: [],
   },
 
-  // ── Moveset initial state ────────────────────────────────────────────
+  // Moveset initial state
   ownedMovesets: [],
   movesetTickets: 0,
   wawMovesetTickets: 0,
@@ -860,9 +856,14 @@ const INITIAL_STATE: GameState = {
   walkirksnachtMovesetTickets: 0,
   movesetShards: {},
 
-  // ── Blood Lunacy initial state ──────────────────────────────────────
+  // Blood Lunacy initial state
   bloodLunacy: 0,
   bloodLunacyThreshold: 1000,
+
+  // ── Chat initial state ──────────────────────────────────────────────
+  chatMessages: [],
+  chatUnread: 0,
+  chatOpen: false,
 };
 
 const useGameStore = create<GameState>()(
@@ -1139,7 +1140,6 @@ const useGameStore = create<GameState>()(
             t.id === 'daily_story' ? { ...t, progress: Math.min(t.max, t.progress + 1) } : t
           ),
         }));
-        // ── Blood Lunacy from story ──────────────────────────────────
         get().addBloodLunacy(100);
         get().addManagerExp(750);
       },
@@ -1882,7 +1882,6 @@ const useGameStore = create<GameState>()(
           ),
         }));
         get().addManagerExp(Math.min(300, Math.floor(boostedScore / 1500)));
-        // ── Blood Lunacy from competitive ──────────────────────────────
         get().addBloodLunacy(50);
       },
       promoteSquad: () => {
@@ -2231,7 +2230,6 @@ const useGameStore = create<GameState>()(
             maxDeployPerDay: deptConfig.maxAbnosPerDay,
             maxEnergy: 100 + (deptConfig.dayUnlock || 0) * 2,
             members: [userId],
-            // ✅ Ensure missionProgress includes totalDeployments
             missionProgress: { worksCompleted: 0, totalDeployments: 0 },
           },
         });
@@ -2291,7 +2289,6 @@ const useGameStore = create<GameState>()(
           workCount: 0,
           todayWorkCount: 0,
         };
-        // ✅ FIX: Increment totalDeployments in missionProgress
         const newMissionProgress = {
           ...state.facility.missionProgress,
           totalDeployments: (state.facility.missionProgress.totalDeployments || 0) + 1,
@@ -2410,7 +2407,6 @@ const useGameStore = create<GameState>()(
         }
         const newDay = state.facility.currentDay + 1;
         const qliphothLevel = state.facility.qliphothLevel + 1;
-        // ✅ FIX: Increase maxEnergy by 5 each day (cap at 300)
         const newMaxEnergy = Math.min(300, state.facility.maxEnergy + 5);
         let activeOrdeal = null;
         if (qliphothLevel >= 2 && qliphothLevel % 2 === 0) {
@@ -2436,14 +2432,13 @@ const useGameStore = create<GameState>()(
             ...s.facility,
             currentDay: newDay,
             energy: s.facility.energy - requiredEnergy,
-            maxEnergy: newMaxEnergy,    // ✅ growth
+            maxEnergy: newMaxEnergy,
             qliphothLevel,
             meltdownProgress: (s.facility.meltdownProgress || 0) + 10,
             meltdownLevel: Math.floor((s.facility.meltdownProgress || 0) / 100),
             deployedToday: [],
             qliphothOverload: {},
             activeOrdeal,
-            // missionProgress is preserved (not reset)
           },
         }));
 
@@ -2796,6 +2791,17 @@ const useGameStore = create<GameState>()(
       addBloodLunacy: (amount: number) => {
         set((state) => ({ bloodLunacy: state.bloodLunacy + amount }));
       },
+
+      // ─── CHAT ACTIONS ──────────────────────────────────────────────────
+      addChatMessage: (msg: { user: string; text: string; timestamp: number }) => {
+        set((state) => ({
+          chatMessages: [...state.chatMessages, msg].slice(-100),
+          chatUnread: state.chatOpen ? state.chatUnread : state.chatUnread + 1,
+        }));
+      },
+      markChatRead: () => set({ chatUnread: 0 }),
+      toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
+      setChatOpen: (open: boolean) => set({ chatOpen: open }),
     }),
     {
       name: 'qliphoth_state',
@@ -2973,6 +2979,11 @@ const useGameStore = create<GameState>()(
         if (newState.bloodLunacy === undefined) newState.bloodLunacy = 0;
         if (newState.bloodLunacyThreshold === undefined) newState.bloodLunacyThreshold = 1000;
 
+        // ─── Chat migration ────────────────────────────────────────────
+        if (newState.chatMessages === undefined) newState.chatMessages = [];
+        if (newState.chatUnread === undefined) newState.chatUnread = 0;
+        if (newState.chatOpen === undefined) newState.chatOpen = false;
+
         return newState;
       },
       onRehydrateStorage: () => (state) => {
@@ -3069,6 +3080,11 @@ const useGameStore = create<GameState>()(
         // ─── Blood Lunacy fields ──────────────────────────────────────
         if (state.bloodLunacy === undefined) state.bloodLunacy = 0;
         if (state.bloodLunacyThreshold === undefined) state.bloodLunacyThreshold = 1000;
+
+        // ─── Chat fields ──────────────────────────────────────────────
+        if (state.chatMessages === undefined) state.chatMessages = [];
+        if (state.chatUnread === undefined) state.chatUnread = 0;
+        if (state.chatOpen === undefined) state.chatOpen = false;
 
         // ─── Ensure daily/weekly tasks include moveset tasks ──────────
         const dailyTasks = state.dailyTasks || [];
@@ -3167,6 +3183,10 @@ const useGameStore = create<GameState>()(
         // Blood Lunacy
         bloodLunacy: state.bloodLunacy,
         bloodLunacyThreshold: state.bloodLunacyThreshold,
+        // Chat fields
+        chatMessages: state.chatMessages,
+        chatUnread: state.chatUnread,
+        chatOpen: state.chatOpen,
       }),
     }
   )
