@@ -831,7 +831,8 @@ const INITIAL_STATE: GameState = {
     maxDeployPerDay: 1,
     unlockedResearch: [],
     completedMissions: [],
-    missionProgress: {},
+    // ✅ FIX: Initialize missionProgress with totalDeployments
+    missionProgress: { worksCompleted: 0, totalDeployments: 0 },
     completedCoreSuppressions: [],
     suppressionRewards: [],
     ordealsCompleted: 0,
@@ -2230,6 +2231,8 @@ const useGameStore = create<GameState>()(
             maxDeployPerDay: deptConfig.maxAbnosPerDay,
             maxEnergy: 100 + (deptConfig.dayUnlock || 0) * 2,
             members: [userId],
+            // ✅ Ensure missionProgress includes totalDeployments
+            missionProgress: { worksCompleted: 0, totalDeployments: 0 },
           },
         });
         return { success: true, department: get().facility };
@@ -2288,12 +2291,18 @@ const useGameStore = create<GameState>()(
           workCount: 0,
           todayWorkCount: 0,
         };
+        // ✅ FIX: Increment totalDeployments in missionProgress
+        const newMissionProgress = {
+          ...state.facility.missionProgress,
+          totalDeployments: (state.facility.missionProgress.totalDeployments || 0) + 1,
+        };
         set((s) => ({
           facility: {
             ...s.facility,
             energy: s.facility.energy - deployCost,
             deployedAbnos: [...s.facility.deployedAbnos, newAbno],
             deployedToday: [...s.facility.deployedToday, abnoId],
+            missionProgress: newMissionProgress,
           },
         }));
         return { success: true, abnormality: abnoData.name, deployCost };
@@ -2366,10 +2375,6 @@ const useGameStore = create<GameState>()(
           newOverload[key].penaltyPercent = Math.round(penalty * 100);
         }
 
-        if (breached) {
-          // breach handling
-        }
-
         set((s) => ({
           facility: {
             ...s.facility,
@@ -2382,7 +2387,6 @@ const useGameStore = create<GameState>()(
           },
         }));
 
-        // ── Blood Lunacy from facility work ──────────────────────────────
         if (isSuccess) get().addBloodLunacy(10);
 
         return {
@@ -2406,6 +2410,8 @@ const useGameStore = create<GameState>()(
         }
         const newDay = state.facility.currentDay + 1;
         const qliphothLevel = state.facility.qliphothLevel + 1;
+        // ✅ FIX: Increase maxEnergy by 5 each day (cap at 300)
+        const newMaxEnergy = Math.min(300, state.facility.maxEnergy + 5);
         let activeOrdeal = null;
         if (qliphothLevel >= 2 && qliphothLevel % 2 === 0) {
           const timeKey = qliphothLevel <= 2 ? 'DAWN' : qliphothLevel <= 4 ? 'NOON' : qliphothLevel <= 6 ? 'DUSK' : 'MIDNIGHT';
@@ -2430,12 +2436,14 @@ const useGameStore = create<GameState>()(
             ...s.facility,
             currentDay: newDay,
             energy: s.facility.energy - requiredEnergy,
+            maxEnergy: newMaxEnergy,    // ✅ growth
             qliphothLevel,
             meltdownProgress: (s.facility.meltdownProgress || 0) + 10,
             meltdownLevel: Math.floor((s.facility.meltdownProgress || 0) / 100),
             deployedToday: [],
             qliphothOverload: {},
             activeOrdeal,
+            // missionProgress is preserved (not reset)
           },
         }));
 
@@ -2457,7 +2465,6 @@ const useGameStore = create<GameState>()(
             },
             lunacy: s.lunacy + lunacyReward,
           }));
-          // ── Blood Lunacy from ordeal victory ──────────────────────────
           get().addBloodLunacy(25);
         } else {
           set((s) => ({
@@ -2483,7 +2490,6 @@ const useGameStore = create<GameState>()(
               deployedAbnos: updatedAbnos,
             },
           }));
-          // ── Blood Lunacy from breach suppression ──────────────────────
           get().addBloodLunacy(30);
         }
       },
@@ -2545,7 +2551,6 @@ const useGameStore = create<GameState>()(
             completedCoreSuppressions: [...s.facility.completedCoreSuppressions, departmentKey],
           },
         }));
-        // ── Blood Lunacy from core suppression ──────────────────────────
         get().addBloodLunacy(100);
         return { success: true };
       },
@@ -2622,7 +2627,6 @@ const useGameStore = create<GameState>()(
             history: [...state.duel.history, { result, timestamp: Date.now() }].slice(-50),
           }
         }));
-        // ── Blood Lunacy from duel ──────────────────────────────────────
         if (result === 'win') get().addBloodLunacy(25);
         else get().addBloodLunacy(10);
       },
@@ -2680,15 +2684,11 @@ const useGameStore = create<GameState>()(
         if (!ticketKey) return null;
         if (state[ticketKey] < 1) return null;
 
-        // Filter pool: obtainable movesets with grade not 'removed'
         let pool = movesets.filter(m =>
           m.obtainable !== false &&
           m.grade !== 'removed'
         );
 
-        // For walkirksnacht, we restrict to only that rank. For others, we also include walkirksnacht if the ticket is WAW? 
-        // Actually, the ticket type determines rank: waw pulls WAW + Walkirksnacht? 
-        // But we want WAW ticket to give WAW or higher? We'll keep current logic:
         if (ticketType === 'waw') {
           pool = pool.filter(m => m.rank === 'WAW' || m.rank === 'WALKIRKSNACHT');
         } else if (ticketType === 'aleph') {
@@ -2699,7 +2699,6 @@ const useGameStore = create<GameState>()(
 
         if (pool.length === 0) return null;
 
-        // Weighted random based on rank rarity
         const rankOrder = ['ZAYIN', 'TETH', 'HE', 'WAW', 'ALEPH', 'WALKIRKSNACHT'];
         const weights = pool.map(m => {
           const idx = rankOrder.indexOf(m.rank);
@@ -2717,14 +2716,11 @@ const useGameStore = create<GameState>()(
           }
         }
 
-        // Deduct ticket
         set((s) => ({
           [ticketKey]: s[ticketKey] - 1,
         }));
 
-        // Add to collection (handles duplicates via shards)
         get().addMoveset(picked.name);
-
         return picked;
       },
 
