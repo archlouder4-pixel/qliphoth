@@ -3,6 +3,7 @@
 // FIX: selectedAbnoId instead of selectedAbnoIndex to avoid falsy-zero and index mismatch bugs.
 // FIX: Bullet capacity enforcement and Lunacy cost.
 // FIX: departmentKey sync – send current facility.departmentKey on join.
+// FIX: HOTFIX – prevent server's null departmentKey from overwriting a valid local key.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -370,7 +371,12 @@ export default function DepartmentView() {
   // ─── Handle incoming WebSocket messages ──────────────────────────
   const handleWebSocketMessage = (data: any) => {
     switch (data.type) {
-      case 'stateUpdate':
+      case 'stateUpdate': {
+        // ✅ HOTFIX: Prevent server's null departmentKey from overwriting a valid local one.
+        const localKey = useGameStore.getState().facility.departmentKey;
+        if (data.facility && !data.facility.departmentKey && localKey) {
+          data.facility.departmentKey = localKey;
+        }
         useGameStore.setState({ facility: data.facility });
         setPlayers(data.players || []);
         if (data.combat) {
@@ -390,10 +396,16 @@ export default function DepartmentView() {
           setView('dashboard');
         }
         break;
+      }
 
       case 'joined':
         console.log('✅ Joined room successfully:', data);
         if (data.facility) {
+          // Also apply the same hotfix in case joined contains a facility without key
+          const localKey = useGameStore.getState().facility.departmentKey;
+          if (data.facility && !data.facility.departmentKey && localKey) {
+            data.facility.departmentKey = localKey;
+          }
           useGameStore.setState({ facility: data.facility });
         }
         if (data.players) {
