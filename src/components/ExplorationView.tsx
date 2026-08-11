@@ -3,6 +3,14 @@
 // FIX: Host detection – derive isHost from players array on 'joined' message.
 // FIX: Room code display – set roomId from server state.
 // FIX: stateUpdate updates roomPhase and phase correctly.
+// FIX (this pass): sendAction now sends a flat payload matching what the Durable
+//     Object reads (data.placeId, data.difficulty, etc.) instead of nesting it
+//     under a `payload` key, which was silently breaking startExploration/
+//     playerAction/resolve/retreat.
+// FIX (this pass): stop overwriting the client-generated room code with the
+//     Durable Object's internal ctx.id.toString() value, and show the room
+//     code in the placeSelect/difficultySelect header too so it's visible
+//     after leaving the initial lobby screen.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import {
@@ -500,9 +508,15 @@ export default function ExplorationView() {
     }
   };
 
+  // FIX: previously sent `{ type, payload }`, nesting the whole payload under a
+  // `payload` key. The Durable Object reads fields flat off the top-level
+  // message (e.g. `data.placeId`, `data.difficulty`, `data.selectedSkillIndex`),
+  // so every action (startExploration, playerAction, resolve, retreat) was
+  // silently arriving with undefined fields and getting dropped server-side
+  // with no error sent back. Spreading the payload flat fixes all of them.
   const sendAction = (type: string, payload?: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type, payload }));
+      wsRef.current.send(JSON.stringify({ type, ...(payload || {}) }));
     } else {
       alert('WebSocket is not connected. Please try again.');
     }
@@ -548,8 +562,12 @@ export default function ExplorationView() {
         const state = data.state;
         if (!state) break;
 
-        // Set room ID from server
-        if (state.roomId) setRoomId(state.roomId);
+        // NOTE: We intentionally do NOT set roomId from state.roomId here.
+        // The Durable Object's state.roomId is `ctx.id.toString()` — its
+        // internal DO id — not the friendly room code the client generated
+        // or typed in. Overwriting roomId with that value replaced the
+        // human-readable code with an opaque hex string. The client already
+        // knows its own roomId from createRoom/joinRoom, so we keep that.
 
         // Set players and determine if current user is host
         if (state.players) {
@@ -1346,6 +1364,15 @@ export default function ExplorationView() {
                 ? 'Choose a location to explore with your party.'
                 : `Host: select difficulty for ${selectedPlace?.name}`}
             </p>
+            {/* FIX: room code was only ever shown on the initial lobby screen,
+                which createRoom skips past immediately. Show it here too so
+                it stays visible once you're in the place/difficulty select
+                flow and need to share it with co-op partners. */}
+            {roomId && (
+              <p className="text-xs text-cyan-400 mt-1">
+                Room Code: <span className="font-mono font-bold">{roomId}</span>
+              </p>
+            )}
           </div>
           <div className="text-right">
             <span className="text-xs text-gray-400">Players: {players.map(p => p.name).join(', ')}</span>
