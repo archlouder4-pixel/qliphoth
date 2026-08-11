@@ -1,5 +1,6 @@
 // DepartmentView.tsx – Co‑op facility management with native WebSocket
 // Added: custom room codes, global chat (visible only in co‑op)
+// FIX: selectedAbnoId instead of selectedAbnoIndex to avoid falsy-zero and index mismatch bugs.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -195,7 +196,7 @@ export default function DepartmentView() {
 
   // ─── UI state ──────────────────────────────────────────────────────
   const [view, setView] = useState<'dashboard' | 'deploy' | 'work' | 'research' | 'missions' | 'bullets' | 'memory' | 'combat'>('dashboard');
-  const [selectedAbnoIndex, setSelectedAbnoIndex] = useState<number | null>(null);
+  const [selectedAbnoId, setSelectedAbnoId] = useState<string | null>(null); // FIX: using ID instead of index
   const [workResult, setWorkResult] = useState<any>(null);
   const [targetDay, setTargetDay] = useState(1);
   const [isCreating, setIsCreating] = useState(false);
@@ -556,10 +557,11 @@ export default function DepartmentView() {
   };
 
   // ─── Execute work with animation ──────────────────────────────────
+  // FIX: using selectedAbnoId (not index)
   const executeWork = (workType: WorkType) => {
     if (workInProgress) return;
-    if (!selectedAbnoIndex) return;
-    const abno = facility.deployedAbnos[selectedAbnoIndex];
+    if (selectedAbnoId === null) return; // FIX: explicit null check
+    const abno = facility.deployedAbnos.find(a => a.abnoId === selectedAbnoId);
     if (!abno) return;
 
     setPendingWorkType(workType);
@@ -592,12 +594,12 @@ export default function DepartmentView() {
   };
 
   const performWork = (workType: WorkType) => {
-    if (!selectedAbnoIndex) {
+    if (selectedAbnoId === null) { // FIX: explicit null check
       setWorkInProgress(false);
       setWorkProgress(0);
       return;
     }
-    const abno = facility.deployedAbnos[selectedAbnoIndex];
+    const abno = facility.deployedAbnos.find(a => a.abnoId === selectedAbnoId);
     if (!abno) {
       setWorkInProgress(false);
       setWorkProgress(0);
@@ -1168,11 +1170,11 @@ export default function DepartmentView() {
             <p className="text-gray-400 text-sm">No abnormalities deployed.</p>
           ) : (
             <div className="space-y-2">
-              {facility.deployedAbnos.map((abno: any, idx: number) => {
+              {facility.deployedAbnos.map((abno: any) => {
                 const isBreaching = abno.qliphothCounter <= 0;
                 const riskEmoji = getRiskEmoji(abno.risk);
                 return (
-                  <div key={idx} className={`border p-3 rounded ${isBreaching ? 'border-red-500/50 bg-red-500/10' : 'border-gray-700 bg-gray-800/50'}`}>
+                  <div key={abno.abnoId} className={`border p-3 rounded ${isBreaching ? 'border-red-500/50 bg-red-500/10' : 'border-gray-700 bg-gray-800/50'}`}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="text-lg">{riskEmoji}</span>
@@ -1255,7 +1257,7 @@ export default function DepartmentView() {
                       ) : (
                         <button
                           onClick={() => {
-                            setSelectedAbnoIndex(idx);
+                            setSelectedAbnoId(abno.abnoId);
                             setView('work');
                           }}
                           className="text-xs px-2 py-1 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
@@ -1266,7 +1268,7 @@ export default function DepartmentView() {
                       {isManager && !isBreaching && (
                         <button
                           onClick={() => {
-                            const newAbnos = facility.deployedAbnos.filter((_: any, i: number) => i !== idx);
+                            const newAbnos = facility.deployedAbnos.filter((a: any) => a.abnoId !== abno.abnoId);
                             useGameStore.setState((s) => ({
                               facility: {
                                 ...s.facility,
@@ -1406,8 +1408,15 @@ export default function DepartmentView() {
       );
     }
 
-    const abnos = facility.deployedAbnos.filter((a: any) => a.qliphothCounter > 0);
-    if (abnos.length === 0) {
+    // FIX: use selectedAbnoId to find the abnormality
+    const selectedAbno = selectedAbnoId
+      ? facility.deployedAbnos.find((a: any) => a.abnoId === selectedAbnoId)
+      : null;
+
+    // Only show abnormalities that are not breached
+    const availableAbnos = facility.deployedAbnos.filter((a: any) => a.qliphothCounter > 0);
+
+    if (availableAbnos.length === 0) {
       return (
         <div className="border border-gray-700 rounded p-4">
           <p className="text-gray-400">No abnormalities available to work on.</p>
@@ -1416,17 +1425,16 @@ export default function DepartmentView() {
       );
     }
 
-    const selectedAbno = selectedAbnoIndex !== null ? abnos[selectedAbnoIndex] : null;
-
+    // If no abnormality selected or selected one is not available, show selection list
     if (!selectedAbno) {
       return (
         <div className="border border-gray-700 rounded p-4">
           <h3 className="text-lg font-bold text-green-400 mb-4">🔨 Select an Abnormality</h3>
           <div className="space-y-2">
-            {abnos.map((abno: any, idx: number) => (
+            {availableAbnos.map((abno: any) => (
               <button
-                key={idx}
-                onClick={() => setSelectedAbnoIndex(idx)}
+                key={abno.abnoId}
+                onClick={() => setSelectedAbnoId(abno.abnoId)}
                 className="w-full text-left border border-gray-700 bg-gray-800/50 p-2 rounded hover:border-cyan-400 transition"
               >
                 <span className="text-lg">{getRiskEmoji(abno.risk)}</span>
@@ -1458,7 +1466,7 @@ export default function DepartmentView() {
           <h3 className="text-lg font-bold text-green-400">
             🔨 Work on {getRiskEmoji(selectedAbno.risk)} {selectedAbno.abnoName}
           </h3>
-          <button onClick={() => setSelectedAbnoIndex(null)} className="text-sm text-gray-400 hover:text-white">← Back</button>
+          <button onClick={() => { setSelectedAbnoId(null); }} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
 
         <div className="grid grid-cols-2 gap-3 mb-4 p-3 bg-gray-700/20 rounded">
