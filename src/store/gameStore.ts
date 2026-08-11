@@ -655,7 +655,7 @@ function getRequiredEnergyForDay(day: number): number {
   return Math.min(required, 2000);
 }
 
-function getDeployCost(day: number, risk: string): number {
+export function getDeployCost(day: number, risk: string): number {
   if (risk === 'ZAYIN' || risk === 'TETH') return 0;
   if (risk === 'HE') return 10 + Math.floor(day * 0.5);
   if (risk === 'WAW') return 25 + Math.floor(day * 0.8);
