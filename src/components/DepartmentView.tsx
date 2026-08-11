@@ -1,14 +1,10 @@
-// DepartmentView.tsx – Co‑op facility management with native WebSocket
-// Added: custom room codes, global chat (visible only in co‑op)
-// FIX: selectedAbnoId instead of selectedAbnoIndex to avoid falsy-zero and index mismatch bugs.
-// FIX: Bullet capacity enforcement and Lunacy cost.
-// FIX: departmentKey sync – send current facility.departmentKey on join.
-// FIX: HOTFIX – prevent server's null departmentKey from overwriting a valid local key.
-// FIX: Co‑op actions now ONLY send to server – no local mutations to avoid desync.
-// FIX: Added 'logAdded' case to handle WebSocket message and silence console warning.
+// ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op)
+// Added: custom room codes, global chat (visible only in co‑op), solo difficulty UI overlay.
+// FIX: Host detection – derive isHost from players array on 'joined' message.
+// FIX: Room code display – set roomId from server state.
+// FIX: stateUpdate updates roomPhase and phase correctly.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
-import { useAuth } from '../auth/AuthContext';
 import {
   identities,
   scaledStats,
@@ -17,6 +13,10 @@ import {
   damageTypeMult,
   infusionMult,
   skillDmgMult,
+  DAMAGE_TYPE_INFO,
+  INFUSION_INFO,
+  DAMAGE_DEBUFFS,
+  INFUSION_DEBUFFS,
   type Identity,
   type CombatCategory,
 } from '../data/identities';
@@ -28,63 +28,50 @@ import {
 } from '../data/identitiesPassives';
 import { weapons, canEquipWeapon } from '../data/weapons';
 import { egoGifts } from '../data/egoGifts';
-import { DEPARTMENTS, DepartmentId } from '../data/departments';
-import { abnormalities, getAbnormalityById, type WorkType } from '../data/abnormalities';
+import { explorationPlaces } from '../data/explorationPlaces';
+import { explorationEnemies, type ExplorationEnemy as RawExplorationEnemy } from '../data/explorationEnemies';
+import { DEPARTMENTS } from '../data/departments';
 import { getDisplayName } from '../auth/discord';
+import { useAuth } from '../auth/AuthContext';
 import GlobalChat from '../components/GlobalChat';
-import { getDeployCost } from '../store/gameStore';
 
-// ─── Constants ──────────────────────────────────────────────────────────
 const MAX_CLASH_POWER = 50;
 const ULTIMATE_GAIN_MIN = 0.003;
 const ULTIMATE_GAIN_MAX = 0.03;
+const MAX_PLAYERS = 3;
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
-// ─── Helpers ──────────────────────────────────────────────────────────
-function getRiskEmoji(risk: string): string {
-  const map: Record<string, string> = {
-    ZAYIN: '🟢',
-    TETH: '🔵',
-    HE: '🟡',
-    WAW: '🟠',
-    ALEPH: '🔴',
-  };
-  return map[risk?.toUpperCase()] || '⚪';
+interface ExplorationEnemy extends RawExplorationEnemy {
+  damageType: string;
+  infusion: string;
+  resistDamageType: string;
+  resistInfusion: string;
+  skills: { name: string; power: number; coins: number; damageType?: string; infusion?: string }[];
+  maxHp: number;
+  currentHp: number;
+  shield: number;
+  dullStacks: number;
+  corrosionTurns: number;
+  isBoss: boolean;
+  bossMechanic?: any;
 }
 
-function getRequiredEnergyForDay(day: number): number {
-  if (day <= 1) return 50;
-  return Math.min(50 + (day - 1) * 20, 2000);
-}
-
-function rollCoin(power: number): number {
-  return Math.random() < 0.5 ? power : 1;
-}
-
-function clash(pP: number, eP: number, pC: number, eC: number) {
-  let pt = rollCoin(pP),
-    et = rollCoin(eP);
-  for (let i = 1; i < Math.max(pC, eC); i++) {
-    if (i < pC) pt += rollCoin(pP);
-    if (i < eC) et += rollCoin(eP);
-  }
-  return { playerTotal: pt, enemyTotal: et };
-}
-
-// ─── Compute agent stats ──────────────────────────────────────────────
-function computeAgentStats(
-  identityId: string,
-  ownedIdentity: any,
-  equippedWeaponId: string | null,
-  equippedGiftIds: string[],
-  facility: any,
-  ownedWeapons: any[],
-  ownedGifts: any[]
-): {
+interface IdentityState {
+  identityId: string;
+  name: string;
+  playerName: string;
   hp: number;
   maxHp: number;
   sp: number;
   maxSp: number;
+  ultimate: number;
+  shield: number;
+  transformationActive: boolean;
+  transformationTurnsLeft: number;
+  transformedSkills: TransformedSkill[];
+  resolveStacks: number;
+  witherStacks: number;
+  bleedStacks: number;
   atk: number;
   def: number;
   spd: number;
@@ -92,16 +79,147 @@ function computeAgentStats(
   infusion: string;
   classCategory: CombatCategory;
   classEffect: number;
-  workSuccess: number;
   skills: any[];
-} {
-  const identity = identities.find(i => i.id === identityId);
-  if (!identity) throw new Error(`Identity ${identityId} not found`);
+  isActive: boolean;
+  attackerBuffTurns: number;
+  hasLeaderSkill: boolean;
+}
 
-  const weapon = equippedWeaponId ? weapons.find(w => w.id === equippedWeaponId) : null;
-  const giftStats = equippedGiftIds.reduce(
-    (acc, gid) => {
-      const gift = egoGifts.find(g => g.id === gid);
+function rand(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function difficultyColor(difficulty: string): string {
+  switch (difficulty) {
+    case 'Easy': return 'border-green-400/30 text-green-400';
+    case 'Normal': return 'border-blue-400/30 text-blue-400';
+    case 'Hard': return 'border-orange-400/30 text-orange-400';
+    case 'Very Hard': return 'border-red-400/30 text-red-400';
+    default: return 'border-gray-400/30 text-gray-400';
+  }
+}
+
+function rollCoin(power: number): number {
+  return Math.random() < 0.5 ? power : 1;
+}
+
+function clash(pP: number, eP: number, pC: number, eC: number) {
+  let pt = rollCoin(pP), et = rollCoin(eP);
+  for (let i = 1; i < Math.max(pC, eC); i++) {
+    if (i < pC) pt += rollCoin(pP);
+    if (i < eC) et += rollCoin(eP);
+  }
+  return { playerTotal: pt, enemyTotal: et };
+}
+
+function computeDepartmentBonus(facility: any): {
+  damageMultiplier: number;
+  defenseMultiplier: number;
+  rewardMultiplier: number;
+  healBonus: number;
+} {
+  let dmgMult = 1.0,
+    defMult = 1.0,
+    rewardMult = 1.0,
+    healBonus = 0.0;
+  if (!facility || !facility.unlockedResearch) return { damageMultiplier: dmgMult, defenseMultiplier: defMult, rewardMultiplier: rewardMult, healBonus };
+  if (facility.unlockedResearch.includes('tt2_protocol')) dmgMult *= 1.10;
+  if (facility.unlockedResearch.includes('join_command')) defMult *= 1.05;
+  if (facility.unlockedResearch.includes('corrective_measures')) rewardMult *= 1.10;
+  if (facility.unlockedResearch.includes('malkuth_reward')) rewardMult *= 1.20;
+  if (facility.unlockedResearch.includes('gebura_reward')) dmgMult *= 1.25;
+  if (facility.unlockedResearch.includes('chesed_reward')) defMult *= 1.10;
+  if (facility.unlockedResearch.includes('netzach_reward')) healBonus = 0.15;
+  return { damageMultiplier: dmgMult, defenseMultiplier: defMult, rewardMultiplier: rewardMult, healBonus };
+}
+
+function convertRawEnemy(raw: RawExplorationEnemy, place?: any, difficulty?: string): ExplorationEnemy {
+  const elementToDmg: Record<string, string> = {
+    Physical: 'Red',
+    Light: 'White',
+    Dark: 'Black',
+    Void: 'Pale',
+    Fire: 'Red',
+    Water: 'Pale',
+    Chaos: 'Black',
+    Spectro: 'White',
+  };
+  const resistToInf: Record<string, string> = {
+    Physical: 'Blunt',
+    Light: 'Pierce',
+    Dark: 'Slash',
+    Void: 'Pierce',
+    Fire: 'Slash',
+    Water: 'Pierce',
+    Chaos: 'Blunt',
+    Spectro: 'Slash',
+  };
+  const damageType = elementToDmg[raw.element] || 'Red';
+  const infusion = resistToInf[raw.resist] || 'Slash';
+  const allDmg = ['Red', 'White', 'Black', 'Pale'];
+  const oppositeDmg = allDmg.find(d => d !== damageType) || 'Pale';
+  const allInf = ['Slash', 'Pierce', 'Blunt'];
+  const oppositeInf = allInf.find(i => i !== infusion) || 'Pierce';
+  const skills = raw.skills.map(s => ({
+    name: s.name,
+    power: s.power || 5,
+    coins: s.coins || 1,
+    damageType: s.damageType || damageType,
+    infusion: s.infusion || infusion,
+  }));
+
+  const diffMultipliers: Record<string, { hp: number; atk: number; def: number }> = {
+    Easy: { hp: 0.7, atk: 0.7, def: 0.7 },
+    Normal: { hp: 1.0, atk: 1.0, def: 1.0 },
+    Hard: { hp: 1.4, atk: 1.3, def: 1.3 },
+    'Very Hard': { hp: 1.8, atk: 1.6, def: 1.6 },
+  };
+  const scale = diffMultipliers[difficulty || 'Normal'] || diffMultipliers['Normal'];
+  const maxHp = Math.floor(raw.maxHp * scale.hp);
+  const atk = Math.floor(raw.atk * scale.atk);
+  const def = Math.floor(raw.def * scale.def);
+
+  return {
+    ...raw,
+    damageType,
+    infusion,
+    resistDamageType: oppositeDmg,
+    resistInfusion: oppositeInf,
+    skills,
+    maxHp,
+    currentHp: maxHp,
+    shield: 0,
+    dullStacks: 0,
+    corrosionTurns: 0,
+    isBoss: raw.isBoss || false,
+    bossMechanic: raw.bossMechanic || null,
+    atk,
+    def,
+  };
+}
+
+function buildIdentityState(
+  identityId: string,
+  playerName: string,
+  store: any
+): IdentityState | null {
+  const identity = identities.find(i => i.id === identityId);
+  if (!identity) return null;
+  const owned = store.ownedIdentities.find((o: any) => o.identityId === identityId);
+  if (!owned) return null;
+  let weaponId = owned.equippedWeaponId || null;
+  if (!weaponId && identity.signatureWeaponId) {
+    const sig = identity.signatureWeaponId;
+    if (canEquipWeapon(identity.id, sig)) {
+      const ownedWeapon = store.ownedWeapons.find((ow: any) => ow.weaponId === sig);
+      if (ownedWeapon) weaponId = sig;
+    }
+  }
+  const weapon = weaponId ? weapons.find((w: any) => w.id === weaponId) : null;
+  const giftIds = store.equippedGifts[identityId] || [];
+  const giftStats = giftIds.reduce(
+    (acc: any, gid: string) => {
+      const gift = egoGifts.find((g: any) => g.id === gid);
       if (gift && gift.stats) {
         acc.hp += gift.stats.hp || 0;
         acc.atk += gift.stats.atk || 0;
@@ -112,28 +230,17 @@ function computeAgentStats(
     },
     { hp: 0, atk: 0, def: 0, spd: 0 }
   );
-
-  const baseStats = scaledStats(identity, ownedIdentity.level, ownedIdentity.classSkillLevel ?? 1);
+  const baseStats = scaledStats(identity, owned.level, owned.classSkillLevel ?? 1);
   const totalHp = baseStats.hp + giftStats.hp;
   const totalAtk = baseStats.atk + giftStats.atk + (weapon?.baseStats.atk || 0);
-  const totalSpd = baseStats.spd + giftStats.spd;
   const totalDef = baseStats.def + giftStats.def;
-
+  const totalSpd = baseStats.spd + giftStats.spd;
   const classCategory = getClassCategory(identity.id);
-  const classEffect = classCategoryEffect(ownedIdentity.classSkillLevel ?? 1);
-
-  let workMult = 1.0;
-  if (facility.unlockedResearch) {
-    if (facility.unlockedResearch.includes('tt2_protocol')) workMult *= 1.10;
-    if (facility.unlockedResearch.includes('education_manuals')) workMult *= 1.15;
-    if (facility.unlockedResearch.includes('professional_education')) workMult *= 1.25;
-    if (facility.unlockedResearch.includes('hp_sp_bullets')) workMult *= 1.05;
-  }
-
+  const classEffect = classCategoryEffect(owned.classSkillLevel ?? 1);
   const skills = identity.skills
-    .filter(s => s.type !== 'class')
-    .map((skill, idx) => {
-      const sl = ownedIdentity.skillLevels?.[idx] ?? 1;
+    .filter((s: any) => s.type !== 'class')
+    .map((skill: any, idx: number) => {
+      const sl = owned.skillLevels?.[idx] ?? 1;
       const power = skill.basePower + skill.powerGrowth * (sl - 1);
       const coins = skill.coinGrowth > 0 ? skill.baseCoins + Math.floor((sl - 1) / skill.coinGrowth) : skill.baseCoins;
       const dmgMult = skillDmgMult(skill.type, sl);
@@ -148,12 +255,22 @@ function computeAgentStats(
         infusion: skill.infusion || identity.baseInfusion || 'Slash',
       };
     });
-
   return {
+    identityId: identity.id,
+    name: identity.name,
+    playerName: playerName,
     hp: totalHp,
     maxHp: totalHp,
     sp: 50,
     maxSp: 100,
+    ultimate: 0,
+    shield: 0,
+    transformationActive: false,
+    transformationTurnsLeft: 0,
+    transformedSkills: [],
+    resolveStacks: 0,
+    witherStacks: 0,
+    bleedStacks: 0,
     atk: totalAtk,
     def: totalDef,
     spd: totalSpd,
@@ -161,189 +278,193 @@ function computeAgentStats(
     infusion: identity.baseInfusion || 'Slash',
     classCategory,
     classEffect,
-    workSuccess: workMult,
     skills,
+    isActive: false,
+    attackerBuffTurns: 0,
+    hasLeaderSkill: true,
   };
 }
 
-// ─── Main Component ──────────────────────────────────────────────────
-export default function DepartmentView() {
+export default function ExplorationView() {
   const { user } = useAuth();
+  const store = useGameStore();
   const {
-    facility,
-    createFacility,
-    joinFacility,
-    leaveFacility,
-    deployAbnormality,
-    workOnAbnormality,
-    advanceDay,
-    resolveOrdeal,
-    suppressBreach,
-    unlockResearch,
-    useMemoryRepository,
-    addBullets,
-    fireBullet,
-    lunacy,
+    team,
     ownedIdentities,
     ownedWeapons,
     ownedGifts,
     equippedGifts,
-  } = useGameStore();
+    facility,
+    addEnkephalin,
+    addManagerExp,
+    addThreads,
+    addHarmonizationSigils,
+    addEclipseResonanceMaterials,
+  } = store;
 
-  // ─── WebSocket ref ───────────────────────────────────────────────────
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
 
-  // ─── Co‑op state ──────────────────────────────────────────────────
-  const [isCoop, setIsCoop] = useState(false);
-  const [roomId, setRoomId] = useState<string | null>(null);
-  const [players, setPlayers] = useState<{ id: string; name: string }[]>([]);
+  const [gameMode, setGameMode] = useState<'solo' | 'coop'>('solo');
   const [isHost, setIsHost] = useState(false);
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [players, setPlayers] = useState<{ id: string; name: string; identityId: string }[]>([]);
+  const [myPlayerIndex, setMyPlayerIndex] = useState<number | null>(null);
+  const [selectedPlace, setSelectedPlace] = useState<any>(null);
+  const [selectedDifficulty, setSelectedDifficulty] = useState<string>('Normal');
+  const [selectedCoopIdentityId, setSelectedCoopIdentityId] = useState<string>(() => {
+    const firstOwned = ownedIdentities[0]?.identityId;
+    return firstOwned || '';
+  });
+  const [roomPhase, setRoomPhase] = useState<'lobby' | 'placeSelect' | 'difficultySelect' | 'exploring'>('lobby');
+  const [isWaitingForHost, setIsWaitingForHost] = useState(false);
 
-  // ─── UI state ──────────────────────────────────────────────────────
-  const [view, setView] = useState<'dashboard' | 'deploy' | 'work' | 'research' | 'missions' | 'bullets' | 'memory' | 'combat'>('dashboard');
-  const [selectedAbnoId, setSelectedAbnoId] = useState<string | null>(null);
-  const [workResult, setWorkResult] = useState<any>(null);
-  const [targetDay, setTargetDay] = useState(1);
-  const [isCreating, setIsCreating] = useState(false);
-  const [isForceLeaving, setIsForceLeaving] = useState(false);
-  const [selectedIdentityId, setSelectedIdentityId] = useState<string | null>(null);
+  const [showDifficultySelector, setShowDifficultySelector] = useState(false);
+  const [pendingPlace, setPendingPlace] = useState<any>(null);
 
-  // ─── Work progress animation state ────────────────────────────────
-  const [workInProgress, setWorkInProgress] = useState(false);
-  const [workProgress, setWorkProgress] = useState(0);
-  const workTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const [pendingWorkType, setPendingWorkType] = useState<WorkType | null>(null);
-
-  // ─── Disband confirmation ──────────────────────────────────────────
-  const [showDisbandConfirm, setShowDisbandConfirm] = useState(false);
-
-  // ─── Combat state ──────────────────────────────────────────────────
-  const [combatEnemy, setCombatEnemy] = useState<any>(null);
-  const [combatPlayer, setCombatPlayer] = useState<any>(null);
-  const [combatTurn, setCombatTurn] = useState<'player' | 'resolve' | 'enemy'>('player');
+  const [phase, setPhase] = useState<'lobby' | 'exploring' | 'waveClear' | 'victory' | 'defeat'>('lobby');
+  const [currentWaveIndex, setCurrentWaveIndex] = useState(0);
+  const [enemies, setEnemies] = useState<ExplorationEnemy[]>([]);
+  const [identityStates, setIdentityStates] = useState<IdentityState[]>([]);
+  const [activeIdentityIndex, setActiveIdentityIndex] = useState(0);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
+  const [selectedEnemyIndex, setSelectedEnemyIndex] = useState(0);
+  const [log, setLog] = useState<string[]>(['🗺️ Welcome to Exploration Mode.']);
+  const [turn, setTurn] = useState<'player' | 'enemy' | 'resolve' | 'finished'>('player');
   const [clashData, setClashData] = useState<{ p: number; e: number; won: boolean; dmg: number; actorName: string } | null>(null);
-  const [combatLog, setCombatLog] = useState<string[]>([]);
+  const [totalEnemiesDefeated, setTotalEnemiesDefeated] = useState(0);
+  const [bossesDefeated, setBossesDefeated] = useState(0);
+  const [waveStartTime, setWaveStartTime] = useState<number | null>(null);
+  const [synergyType, setSynergyType] = useState<'amplifier' | 'support' | null>(null);
+  const [synergyAtkBuff, setSynergyAtkBuff] = useState(0);
+  const [synergyDefBuff, setSynergyDefBuff] = useState(0);
+  const [synergyHealBonus, setSynergyHealBonus] = useState(0);
+  const [synergyDmgAmp, setSynergyDmgAmp] = useState(0);
   const [isCombatFinished, setIsCombatFinished] = useState(false);
-  const [playerHp, setPlayerHp] = useState(0);
-  const [playerMaxHp, setPlayerMaxHp] = useState(0);
-  const [enemyHp, setEnemyHp] = useState(0);
-  const [enemyMaxHp, setEnemyMaxHp] = useState(0);
-  const [combatInitiator, setCombatInitiator] = useState<string | null>(null);
+  const [rewardsClaimed, setRewardsClaimed] = useState(false);
+  const [finalScore, setFinalScore] = useState<number | null>(null);
 
-  // ─── Hydration ────────────────────────────────────────────────────
-  const [isHydrated, setIsHydrated] = useState(false);
-  useEffect(() => {
-    const stored = localStorage.getItem('qliphoth_state');
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (parsed.state?.facility?.isActive) {
-          const current = useGameStore.getState().facility;
-          if (!current.isActive) {
-            useGameStore.setState({ facility: parsed.state.facility });
-          }
-        }
-      } catch (e) {}
+  const activeIdentity = identityStates[activeIdentityIndex] || null;
+  const activeSkills = activeIdentity
+    ? activeIdentity.transformationActive && activeIdentity.transformedSkills.length > 0
+      ? activeIdentity.transformedSkills
+      : activeIdentity.skills
+    : [];
+
+  const deptBonus = computeDepartmentBonus(facility);
+
+  const detectSynergy = (states: IdentityState[]) => {
+    const classes = states.map((s) => s.classCategory);
+    const hasAttacker = classes.includes('Attacker');
+    const hasTank = classes.includes('Tank');
+    const hasAmplifier = classes.includes('Amplifier');
+    const hasSupport = classes.includes('Support');
+    let atkBuff = 0,
+      defBuff = 0,
+      healBonus = 0,
+      dmgAmp = 0,
+      type: 'amplifier' | 'support' | null = null;
+    if (hasAttacker && hasTank && hasAmplifier && !hasSupport) {
+      atkBuff = 0.20;
+      defBuff = 0.20;
+      healBonus = 0.15;
+      dmgAmp = 0.10;
+      type = 'amplifier';
+    } else if (hasAttacker && hasTank && hasSupport && !hasAmplifier) {
+      atkBuff = 0.20;
+      defBuff = 0.20;
+      healBonus = 0.50;
+      dmgAmp = 0;
+      type = 'support';
     }
-    setIsHydrated(true);
-  }, []);
+    return { atkBuff, defBuff, healBonus, dmgAmp, type };
+  };
 
-  // ─── Clean up work timer ──────────────────────────────────────────
-  useEffect(() => {
-    return () => {
-      if (workTimerRef.current) {
-        clearInterval(workTimerRef.current);
-        workTimerRef.current = null;
-      }
-    };
-  }, []);
+  const startSoloExploration = (place: any, selectedIds: string[], difficulty: string = 'Normal') => {
+    const states = selectedIds
+      .map((id) => {
+        const playerName = user ? getDisplayName(user) : 'Solo';
+        return buildIdentityState(id, playerName, store);
+      })
+      .filter(Boolean) as IdentityState[];
+    if (states.length === 0) {
+      setLog(['⚠️ No valid identities selected.']);
+      return;
+    }
 
-  // ─── Force Leave ──────────────────────────────────────────────────
-  const handleForceLeave = async () => {
-    if (isForceLeaving) return;
-    setIsForceLeaving(true);
-    try {
-      const result = leaveFacility(user?.id || 'guest');
-      if (result.success) {
-        alert('🚪 You left the facility.');
-        setIsForceLeaving(false);
-        return;
-      }
-      alert('⚠️ Normal leave failed. Performing emergency reset...');
-      useGameStore.setState((state) => ({
-        facility: {
-          ...state.facility,
-          isActive: false,
-          name: '',
-          managerId: null,
-          departmentKey: null,
-          currentDay: 1,
-          energy: 0,
-          maxEnergy: 100,
-          totalEnergy: 0,
-          members: [],
-          deployedAbnos: [],
-          deployedToday: [],
-          unlockedResearch: [],
-          completedMissions: [],
-          missionProgress: {},
-          completedCoreSuppressions: [],
-          suppressionRewards: [],
-          ordealsCompleted: 0,
-          activeOrdeal: null,
-          activeBoost: null,
-          qliphothOverload: {},
-          log: [],
-        },
-      }));
-      const stored = localStorage.getItem('qliphoth_state');
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          if (parsed.state?.facility) {
-            parsed.state.facility.isActive = false;
-            localStorage.setItem('qliphoth_state', JSON.stringify(parsed));
-          }
-        } catch (e) {}
-      }
-      alert('✅ Emergency reset complete.');
-    } catch (err) {
-      console.error('Force leave error:', err);
-      alert('❌ Force leave failed. Please refresh the page.');
-    } finally {
-      setIsForceLeaving(false);
+    states.forEach((s) => {
+      s.atk = Math.floor(s.atk * deptBonus.damageMultiplier);
+      s.def = Math.floor(s.def * deptBonus.defenseMultiplier);
+    });
+
+    const synergy = detectSynergy(states);
+    setSynergyType(synergy.type);
+    setSynergyAtkBuff(synergy.atkBuff);
+    setSynergyDefBuff(synergy.defBuff);
+    setSynergyHealBonus(synergy.healBonus);
+    setSynergyDmgAmp(synergy.dmgAmp);
+
+    states.forEach((s) => {
+      s.atk = Math.floor(s.atk * (1 + synergy.atkBuff));
+      s.def = Math.floor(s.def * (1 + synergy.defBuff));
+    });
+
+    if (states.length > 0) states[0].isActive = true;
+    setIdentityStates(states);
+    setActiveIdentityIndex(0);
+
+    setSelectedPlace(place);
+    setSelectedDifficulty(difficulty);
+    setCurrentWaveIndex(0);
+    setTotalEnemiesDefeated(0);
+    setBossesDefeated(0);
+    setFinalScore(null);
+    setRewardsClaimed(false);
+    setIsCombatFinished(false);
+    setShowDifficultySelector(false);
+    setPendingPlace(null);
+
+    const wave = place.waves[0];
+    const waveEnemies = wave.enemies
+      .map((id: string) => {
+        const raw = explorationEnemies[id];
+        if (!raw) return null;
+        return convertRawEnemy(raw, place, difficulty);
+      })
+      .filter(Boolean) as ExplorationEnemy[];
+
+    setEnemies(waveEnemies);
+    setPhase('exploring');
+    setTurn('player');
+    setSelectedSkillIndex(0);
+    setSelectedEnemyIndex(0);
+    setLog([`🗺️ Exploring: ${place.name} (${difficulty})`]);
+    addLog(`🌊 Wave ${currentWaveIndex + 1}: ${wave.description}`);
+    if (waveEnemies.length > 0) {
+      addLog(`⚔️ Encountered ${waveEnemies.map((e) => e.name).join(', ')}!`);
     }
   };
 
-  // ─── WebSocket connection helpers ──────────────────────────────────
   const connectWebSocket = (roomId: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
     const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
-    const ws = new WebSocket(`wss://${wsUrl}/room/department/${roomId}`);
+    const ws = new WebSocket(`wss://${wsUrl}/room/exploration/${roomId}`);
     wsRef.current = ws;
 
-    let joinSent = false;
-
     ws.onopen = () => {
-      console.log('WebSocket connected to department room');
-      const currentDeptKey = useGameStore.getState().facility.departmentKey;
-      const deptConfig = DEPARTMENTS[currentDeptKey as DepartmentId];
-      if (!joinSent) {
-        joinSent = true;
-        ws.send(JSON.stringify({
-          type: 'join',
-          playerId: user?.id || crypto.randomUUID(),
-          playerName: getDisplayName(user),
-          identityId: selectedIdentityId,
-          departmentKey: currentDeptKey,
-          departmentConfig: {
-            maxDeployPerDay: deptConfig?.maxAbnosPerDay || 1,
-            maxEnergy: 100 + (deptConfig?.dayUnlock || 0) * 2,
-          },
-        }));
+      console.log('WebSocket connected to exploration room');
+      const identityState = buildIdentityState(selectedCoopIdentityId, getDisplayName(user), store);
+      if (!identityState) {
+        addLog('⚠️ Could not build identity state.');
+        ws.close();
+        return;
       }
+      ws.send(JSON.stringify({
+        type: 'join',
+        playerId: user?.id || crypto.randomUUID(),
+        playerName: getDisplayName(user),
+        identityState,
+      }));
     };
 
     ws.onmessage = (event) => {
@@ -379,123 +500,6 @@ export default function DepartmentView() {
     }
   };
 
-  // ─── Handle incoming WebSocket messages ──────────────────────────
-  const handleWebSocketMessage = (data: any) => {
-    switch (data.type) {
-      case 'stateUpdate': {
-        // ✅ HOTFIX: Prevent server's null departmentKey from overwriting a valid local one.
-        const localKey = useGameStore.getState().facility.departmentKey;
-        if (data.facility && !data.facility.departmentKey && localKey) {
-          data.facility.departmentKey = localKey;
-        }
-        useGameStore.setState({ facility: data.facility });
-        setPlayers(data.players || []);
-        if (data.combat) {
-          setCombatEnemy(data.combat.enemy);
-          setCombatPlayer(data.combat.player);
-          setPlayerHp(data.combat.playerHp);
-          setPlayerMaxHp(data.combat.playerMaxHp);
-          setEnemyHp(data.combat.enemyHp);
-          setEnemyMaxHp(data.combat.enemyMaxHp);
-          setCombatTurn(data.combat.turn);
-          setClashData(data.combat.clashData || null);
-          setCombatLog(data.combat.log || []);
-          setIsCombatFinished(data.combat.isFinished);
-          setCombatInitiator(data.combat.initiator);
-          setView('combat');
-        } else {
-          setView('dashboard');
-        }
-        break;
-      }
-
-      case 'actionResult': {
-        if (data.success) {
-          alert(`✅ ${data.message}`);
-          addFacilityLog(data.message, 'success');
-        } else {
-          alert(`❌ ${data.message}`);
-        }
-        break;
-      }
-
-      case 'joined':
-        console.log('✅ Joined room successfully:', data);
-        if (data.facility) {
-          const localKey = useGameStore.getState().facility.departmentKey;
-          if (data.facility && !data.facility.departmentKey && localKey) {
-            data.facility.departmentKey = localKey;
-          }
-          useGameStore.setState({ facility: data.facility });
-        }
-        if (data.players) {
-          setPlayers(data.players);
-        }
-        setIsCoop(true);
-        if (data.roomId && !roomId) {
-          setRoomId(data.roomId);
-        }
-        break;
-
-      case 'departmentRoomDisbanded':
-        useGameStore.setState((state) => ({
-          facility: {
-            ...state.facility,
-            isActive: false,
-            members: [],
-            deployedAbnos: [],
-            deployedToday: [],
-            log: [],
-          },
-        }));
-        setIsCoop(false);
-        setRoomId(null);
-        setPlayers([]);
-        setIsHost(false);
-        setView('dashboard');
-        alert('The room has been disbanded by the host.');
-        disconnectWebSocket();
-        break;
-
-      case 'departmentCombatAction':
-        setPlayerHp(data.playerHp);
-        setEnemyHp(data.enemyHp);
-        setClashData(data.clashData || null);
-        setCombatTurn(data.turn);
-        if (data.log) setCombatLog(prev => [...prev.slice(-20), data.log]);
-        break;
-
-      case 'departmentCombatFinished':
-        setIsCombatFinished(true);
-        setView('dashboard');
-        if (data.won) {
-          suppressBreach(data.abnoId, true);
-          addFacilityLog(`${data.initiator} suppressed ${data.enemyName}!`, 'success');
-        } else {
-          addFacilityLog(`${data.initiator} failed to suppress ${data.enemyName}.`, 'danger');
-        }
-        break;
-
-      case 'logAdded':
-        // Facility log was updated on the server – we can ignore it,
-        // since the stateUpdate already includes the full log.
-        // This case just silences the "Unhandled WebSocket message" warning.
-        break;
-
-      case 'error':
-        alert(`❌ ${data.message}`);
-        break;
-
-      case 'welcome':
-        console.log('Welcome from server:', data.message);
-        break;
-
-      default:
-        console.log('Unhandled WebSocket message:', data);
-    }
-  };
-
-  // ─── Send action via WebSocket ──────────────────────────────────
   const sendAction = (type: string, payload?: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type, payload }));
@@ -504,390 +508,777 @@ export default function DepartmentView() {
     }
   };
 
-  // ─── Create/Join room with custom code support ──────────────────
-  const createDepartmentRoom = (deptId: string, customRoomId?: string) => {
-    if (!user) {
-      alert('Please log in first.');
+  // ─── HANDLE WEBSOCKET MESSAGES (FIXED) ────────────────────────────
+  const handleWebSocketMessage = (data: any) => {
+    switch (data.type) {
+      case 'explorationRoomCreated':
+        setRoomId(data.roomId);
+        setPlayers(data.players);
+        setMyPlayerIndex(data.players.findIndex((p: any) => p.id === user?.id));
+        setIsHost(true);
+        setSelectedPlace(null);
+        setRoomPhase('placeSelect');
+        setIsWaitingForHost(false);
+        addLog(`🌐 Room created. You are the host. Select a place and difficulty.`);
+        break;
+
+      case 'explorationRoomJoined':
+        setRoomId(data.roomId);
+        setPlayers(data.players);
+        setMyPlayerIndex(data.players.findIndex((p: any) => p.id === user?.id));
+        setIsHost(data.isHost || false);
+        if (data.place) {
+          const placeData = explorationPlaces.find(p => p.id === data.place.id);
+          if (placeData) setSelectedPlace(placeData);
+          setRoomPhase('difficultySelect');
+          if (data.isHost) {
+            addLog('🌐 Host: Select difficulty and start exploration.');
+          } else {
+            addLog(`🌐 Room joined. Waiting for host to start.`);
+          }
+        } else {
+          setRoomPhase('placeSelect');
+          setIsWaitingForHost(!data.isHost);
+        }
+        addLog(`🌐 Players: ${data.players.map((p: any) => p.name).join(', ')}`);
+        break;
+
+      // ─── FIXED: Handle 'joined' message ──────────────────────────
+      case 'joined': {
+        const state = data.state;
+        if (!state) break;
+
+        // Set room ID from server
+        if (state.roomId) setRoomId(state.roomId);
+
+        // Set players and determine if current user is host
+        if (state.players) {
+          setPlayers(state.players);
+          const myPlayer = state.players.find((p: any) => p.id === user?.id);
+          if (myPlayer) {
+            setIsHost(myPlayer.isHost);
+            setMyPlayerIndex(state.players.indexOf(myPlayer));
+          } else {
+            setIsHost(false);
+            setMyPlayerIndex(-1);
+          }
+        }
+
+        // If there's a placeId, we are already in exploration
+        if (state.placeId) {
+          const placeData = explorationPlaces.find(p => p.id === state.placeId);
+          if (placeData) {
+            setSelectedPlace(placeData);
+            setSelectedDifficulty(state.difficulty || 'Normal');
+            setIdentityStates(state.identityStates || []);
+            setEnemies(state.enemies || []);
+            setTurn(state.turn || 'player');
+            setActiveIdentityIndex(state.activeIdentityIndex || 0);
+            setClashData(state.clashData || null);
+            setLog(state.log || ['⚔️ Exploration in progress...']);
+            setPhase('exploring');
+            setRoomPhase('exploring');
+            if (state.currentWaveIndex !== undefined) setCurrentWaveIndex(state.currentWaveIndex);
+            if (state.totalEnemiesDefeated !== undefined) setTotalEnemiesDefeated(state.totalEnemiesDefeated);
+          }
+        } else {
+          // No place selected yet -> go to place select
+          setRoomPhase('placeSelect');
+          setIsWaitingForHost(false);
+          addLog(`🌐 Joined room. Players: ${(state.players || []).map((p: any) => p.name).join(', ')}`);
+        }
+        break;
+      }
+
+      // ─── FIXED: Handle 'stateUpdate' with roomPhase updates ──────
+      case 'stateUpdate': {
+        const state = data.state;
+        if (!state) break;
+
+        // Update players and host status
+        if (state.players) {
+          setPlayers(state.players);
+          const myPlayer = state.players.find((p: any) => p.id === user?.id);
+          if (myPlayer) setIsHost(myPlayer.isHost);
+        }
+
+        // Update room phase based on state
+        if (state.placeId) {
+          setRoomPhase('exploring');
+          setPhase('exploring');
+        } else {
+          setRoomPhase('placeSelect');
+        }
+
+        if (state.identityStates) setIdentityStates(state.identityStates);
+        if (state.enemies) setEnemies(state.enemies);
+        if (state.turn) setTurn(state.turn);
+        if (state.activeIdentityIndex !== undefined) setActiveIdentityIndex(state.activeIdentityIndex);
+        if (state.clashData) setClashData(state.clashData);
+        if (state.log) setLog(state.log);
+        if (state.phase === 'victory') {
+          setPhase('victory');
+          setIsCombatFinished(true);
+          if (state.finalScore !== undefined) setFinalScore(state.finalScore);
+        } else if (state.phase === 'defeat') {
+          setPhase('defeat');
+          setIsCombatFinished(true);
+        }
+        break;
+      }
+
+      case 'explorationStarted':
+        const placeData = explorationPlaces.find(p => p.id === data.placeId);
+        if (!placeData) {
+          addLog('⚠️ Place not found.');
+          return;
+        }
+        setSelectedPlace(placeData);
+        setSelectedDifficulty(data.difficulty);
+        setIdentityStates(data.identityStates);
+        if (data.identityStates.length > 0) data.identityStates[0].isActive = true;
+        setActiveIdentityIndex(0);
+        setEnemies(data.enemies);
+        setPhase('exploring');
+        setTurn('player');
+        setSelectedSkillIndex(0);
+        setSelectedEnemyIndex(0);
+        setLog(data.log || [`🗺️ Exploring: ${placeData.name} (${data.difficulty})`]);
+        if (data.log && data.log.length > 0) {
+          data.log.forEach((l: string) => addLog(l));
+        }
+        setRoomPhase('exploring');
+        break;
+
+      case 'explorationStateUpdate':
+        setIdentityStates(data.identityStates);
+        setEnemies(data.enemies);
+        setTurn(data.turn);
+        setActiveIdentityIndex(data.activeIdentityIndex);
+        setClashData(data.clashData || null);
+        setLog(data.log);
+        break;
+
+      case 'explorationFinished':
+        setFinalScore(data.score);
+        setPhase('victory');
+        setIsCombatFinished(true);
+        addLog(`🏆 Exploration complete! Score: ${data.score}`);
+        break;
+
+      case 'explorationDefeat':
+        setPhase('defeat');
+        setIsCombatFinished(true);
+        addLog('💀 All identities defeated. Exploration failed.');
+        break;
+
+      case 'explorationError':
+        alert(`❌ ${data.message}`);
+        break;
+
+      case 'explorationDisbanded':
+        alert('The room has been disbanded by the host.');
+        resetExploration();
+        break;
+
+      default:
+        console.log('Unhandled WebSocket message:', data);
+    }
+  };
+
+  const createRoom = (placeId: string, customRoomId?: string) => {
+    if (!selectedCoopIdentityId) {
+      addLog('⚠️ Please select an identity first.');
+      return;
+    }
+    const identityState = buildIdentityState(selectedCoopIdentityId, getDisplayName(user), store);
+    if (!identityState) {
+      addLog('⚠️ Could not build identity data.');
       return;
     }
     const roomId = customRoomId || crypto.randomUUID().slice(0, 8);
     setRoomId(roomId);
     setIsHost(true);
-    setIsCoop(true);
-    const result = createFacility(deptId, user.id);
-    if (result.success) {
-      connectWebSocket(roomId);
-      alert(`🏢 Room created: ${roomId}`);
-    } else {
-      alert(`❌ ${result.reason}`);
-    }
+    setRoomPhase('placeSelect');
+    connectWebSocket(roomId);
+    addLog(`🌐 Room created. Code: ${roomId}`);
   };
 
-  const joinDepartmentRoom = (roomId: string) => {
-    if (!user) {
-      alert('Please log in first.');
+  const joinRoom = (roomId: string) => {
+    if (!selectedCoopIdentityId) {
+      addLog('⚠️ Please select an identity first.');
       return;
     }
     setRoomId(roomId);
-    setIsCoop(true);
     connectWebSocket(roomId);
-    alert(`🔗 Joining room: ${roomId}`);
   };
 
-  // ─── Disband room ──────────────────────────────────────────────────
+  const startExploration = () => {
+    if (!roomId || !selectedPlace || !selectedDifficulty) return;
+    sendAction('startExploration', {
+      placeId: selectedPlace.id,
+      difficulty: selectedDifficulty,
+    });
+  };
+
   const disbandRoom = () => {
-    if (facility.managerId !== user?.id) {
-      alert('Only the manager can disband the facility.');
-      return;
-    }
-
-    sendAction('disbandDepartmentRoom', {});
-    useGameStore.setState((state) => ({
-      facility: {
-        ...state.facility,
-        isActive: false,
-        name: '',
-        managerId: null,
-        departmentKey: null,
-        currentDay: 1,
-        energy: 0,
-        maxEnergy: 100,
-        members: [],
-        deployedAbnos: [],
-        deployedToday: [],
-        unlockedResearch: [],
-        completedMissions: [],
-        missionProgress: {},
-        log: [],
-      },
-    }));
-    setIsCoop(false);
-    setRoomId(null);
-    setPlayers([]);
-    setIsHost(false);
-    setView('dashboard');
-    setShowDisbandConfirm(false);
-    disconnectWebSocket();
-    alert('🏢 Facility disbanded.');
-  };
-
-  // ─── Facility Log helper ─────────────────────────────────────────
-  const addFacilityLog = (message: string, type: 'info' | 'success' | 'warning' | 'danger' = 'info') => {
-    const entry = {
-      timestamp: Date.now(),
-      message,
-      type,
-      player: getDisplayName(user),
-    };
-    useGameStore.setState((state) => ({
-      facility: {
-        ...state.facility,
-        log: [entry, ...(state.facility.log || [])].slice(0, 50),
-      },
-    }));
-    if (isCoop && wsRef.current) {
-      sendAction('addLog', entry);
+    if (isHost) {
+      sendAction('disbandExplorationRoom', {});
     }
   };
 
-  // ─── Get agent stats ──────────────────────────────────────────────
-  const getAgentStats = () => {
-    if (!selectedIdentityId) return null;
-    const owned = ownedIdentities.find(o => o.identityId === selectedIdentityId);
-    if (!owned) return null;
-    const weaponId = owned.equippedWeaponId || null;
-    const giftIds = equippedGifts[selectedIdentityId] || [];
-    return computeAgentStats(
-      selectedIdentityId,
-      owned,
-      weaponId,
-      giftIds,
-      facility,
-      ownedWeapons,
-      ownedGifts
-    );
-  };
+  const addLog = (msg: string) => setLog((prev) => [...prev.slice(-30), msg]);
 
-  // ─── Get available abnormalities ──────────────────────────────────
-  const getAvailableAbnos = () => {
-    const deployedIds = facility.deployedAbnos.map((a: any) => a.abnoId);
-    return abnormalities.filter(ab => !deployedIds.includes(ab.id));
-  };
-
-  // ─── Execute work with animation ──────────────────────────────────
-  const executeWork = (workType: WorkType) => {
-    if (workInProgress) return;
-    if (selectedAbnoId === null) return;
-    const abno = facility.deployedAbnos.find(a => a.abnoId === selectedAbnoId);
-    if (!abno) return;
-
-    if (isCoop) {
-      // In co‑op, only send to server; wait for server response
-      sendAction('work', { abnoId: abno.abnoId, workType });
-      setWorkInProgress(true);
-      // The server's stateUpdate will clear the animation and update UI.
-      return;
-    }
-
-    // Solo mode: local execution
-    setPendingWorkType(workType);
-    setWorkInProgress(true);
-    setWorkProgress(0);
-
-    const duration = 2000;
-    const interval = 50;
-    const steps = duration / interval;
-    let currentStep = 0;
-
-    if (workTimerRef.current) {
-      clearInterval(workTimerRef.current);
-      workTimerRef.current = null;
-    }
-
-    workTimerRef.current = setInterval(() => {
-      currentStep += 1;
-      const progress = Math.min(100, (currentStep / steps) * 100);
-      setWorkProgress(progress);
-
-      if (progress >= 100) {
-        if (workTimerRef.current) {
-          clearInterval(workTimerRef.current);
-          workTimerRef.current = null;
-        }
-        performWork(workType);
+  const handlePlayerAction = () => {
+    if (turn !== 'player' || isCombatFinished) return;
+    const active = identityStates[activeIdentityIndex];
+    if (!active || active.hp <= 0) {
+      const nextIdx = identityStates.findIndex((s, i) => i > activeIdentityIndex && s.hp > 0);
+      if (nextIdx === -1) {
+        addLog('💀 No alive identities left.');
+        setIsCombatFinished(true);
+        setTurn('finished');
+        return;
       }
-    }, interval);
-  };
-
-  const performWork = (workType: WorkType) => {
-    if (selectedAbnoId === null) {
-      setWorkInProgress(false);
-      setWorkProgress(0);
-      return;
-    }
-    const abno = facility.deployedAbnos.find(a => a.abnoId === selectedAbnoId);
-    if (!abno) {
-      setWorkInProgress(false);
-      setWorkProgress(0);
+      setActiveIdentityIndex(nextIdx);
       return;
     }
 
-    const result = workOnAbnormality(abno.abnoId, workType, user?.id || 'guest');
-    setWorkResult(result);
-    addFacilityLog(`${getDisplayName(user)} worked on ${abno.abnoName} (${workType}) - ${result.isSuccess ? 'Success' : 'Failed'}`, result.isSuccess ? 'success' : 'danger');
-    if (result.breached) alert(`⚠️ ${abno.abnoName} has breached!`);
-    if (result.boostDropped) alert(`🎉 Temperance Boost dropped!`);
-
-    setWorkInProgress(false);
-    setWorkProgress(0);
-    setPendingWorkType(null);
-
-    setTimeout(() => {
-      setWorkResult(null);
-    }, 3000);
-  };
-
-  // ─── Combat action ──────────────────────────────────────────────────
-  const handleCombatAction = () => {
-    if (combatTurn !== 'player' || isCombatFinished) return;
-    if (combatInitiator && combatInitiator !== user?.id) {
-      alert('Only the initiator can take combat actions.');
-      return;
-    }
-    const player = combatPlayer;
-    const enemy = combatEnemy;
-    if (!player || !enemy) return;
-
-    const skill = player.skills[selectedSkillIndex];
+    const skill = activeSkills[selectedSkillIndex];
     if (!skill) return;
+    const isEgo = skill.type === 'ego';
+    if (isEgo && active.ultimate < 100) {
+      addLog('⚠️ Ultimate not full! Ego needs 100% Ultimate.');
+      return;
+    }
+
+    const enemy = enemies[selectedEnemyIndex];
+    if (!enemy || enemy.currentHp <= 0) {
+      const nextEnemy = enemies.findIndex((e) => e.currentHp > 0);
+      if (nextEnemy === -1) {
+        addLog('⚠️ No enemies left!');
+        return;
+      }
+      setSelectedEnemyIndex(nextEnemy);
+      return;
+    }
 
     const eSkill = enemy.skills[Math.floor(Math.random() * enemy.skills.length)];
     const result = clash(skill.power, eSkill.power, skill.coins, eSkill.coins);
-    const dmgMult = damageTypeMult(skill.damageType || player.damageType, enemy.resistDamageType);
-    const infMult = infusionMult(skill.infusion || player.infusion, enemy.resistInfusion);
-    const mult = dmgMult * infMult;
-    let won = result.playerTotal >= result.enemyTotal;
+
+    const dmgMult = damageTypeMult(skill.damageType || active.damageType, enemy.resistDamageType);
+    const infMult = infusionMult(skill.infusion || active.infusion, enemy.resistInfusion);
+    let mult = dmgMult * infMult;
+
+    let classMult = 1.0;
+    if (active.classCategory === 'Attacker') classMult += active.classEffect;
+    if (active.classCategory === 'Amplifier' && isEgo) classMult += active.classEffect;
+    if (synergyDmgAmp > 0) classMult += synergyDmgAmp;
+    if (active.attackerBuffTurns > 0) classMult += 0.30;
+
+    let tankBonus = 1.0;
+    if (enemy.corrosionTurns > 0) tankBonus += 0.08;
+
+    const won = result.playerTotal >= result.enemyTotal;
     let dmg = 0;
-    let enemyDmg = 0;
+
     if (won) {
       const diff = result.playerTotal - result.enemyTotal;
       const basePercent = 0.005 + 0.0015 * diff;
-      let finalPercent = basePercent * mult * skill.dmgMult;
-      finalPercent *= (0.85 + Math.random() * 0.3);
+      let finalPercent = basePercent * mult * skill.dmgMult * classMult * tankBonus;
+      finalPercent *= 0.85 + Math.random() * 0.3;
       dmg = Math.max(1, Math.floor(finalPercent * enemy.maxHp));
-      const newEnemyHp = Math.max(0, enemyHp - dmg);
-      setEnemyHp(newEnemyHp);
-      setClashData({ p: result.playerTotal, e: result.enemyTotal, won: true, dmg, actorName: player.name });
-      const logMsg = `✅ ${player.name} dealt ${dmg} damage to ${enemy.name}!`;
-      setCombatLog(prev => [...prev.slice(-20), logMsg]);
-      if (isCoop) {
-        sendAction('combatAction', { playerHp, enemyHp: newEnemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: true, dmg, actorName: player.name }, turn: 'resolve', log: logMsg });
+
+      const newEnemies = enemies.map((e, i) =>
+        i === selectedEnemyIndex ? { ...e, currentHp: Math.max(0, e.currentHp - dmg) } : e
+      );
+      setEnemies(newEnemies);
+      addLog(`✅ ${active.name} won clash! ${skill.name} → ${dmg} dmg (${((dmg / enemy.maxHp) * 100).toFixed(1)}% of enemy HP)`);
+      setClashData({ p: result.playerTotal, e: result.enemyTotal, won: true, dmg, actorName: active.name });
+
+      const gain = ULTIMATE_GAIN_MIN + Math.random() * (ULTIMATE_GAIN_MAX - ULTIMATE_GAIN_MIN);
+      setIdentityStates((prev) =>
+        prev.map((s, i) =>
+          i === activeIdentityIndex ? { ...s, ultimate: Math.min(100, s.ultimate + gain * 100) } : s
+        )
+      );
+
+      if (active.classCategory === 'Attacker' && isEgo) {
+        setIdentityStates((prev) =>
+          prev.map((s) =>
+            s.identityId === active.identityId
+              ? { ...s, attackerBuffTurns: 2, atk: Math.floor(s.atk * 1.3) }
+              : s
+          )
+        );
+        addLog('⚔️ Attacker buff active! +30% ATK for 2 turns');
       }
-      if (newEnemyHp <= 0) {
-        setIsCombatFinished(true);
-        const finishLog = `🏆 ${enemy.name} defeated!`;
-        setCombatLog(prev => [...prev, finishLog]);
-        addFacilityLog(`${player.name} suppressed ${enemy.name}!`, 'success');
-        if (isCoop) {
-          sendAction('combatFinish', { abnoId: enemy.abnoId, won: true, initiator: user?.id, enemyName: enemy.name });
-        } else {
-          suppressBreach(enemy.abnoId, true);
+      if (active.classCategory === 'Tank' && isEgo) {
+        const shred = active.classEffect;
+        setEnemies((prev) =>
+          prev.map((e) =>
+            e === enemy ? { ...e, def: Math.max(1, Math.floor(e.def * (1 - shred))) } : e
+          )
+        );
+        addLog(`🛡️ Tank shred: enemy DEF reduced by ${(shred * 100).toFixed(0)}%`);
+        setEnemies((prev) =>
+          prev.map((e) => (e === enemy ? { ...e, corrosionTurns: 2 } : e))
+        );
+        addLog('🛡️ Corrosion applied! Enemy resistances -8% for 2 turns');
+        const shieldAmt = Math.floor(dmg * 0.15);
+        setIdentityStates((prev) =>
+          prev.map((s) => (s.hp > 0 ? { ...s, shield: s.shield + shieldAmt } : s))
+        );
+        addLog(`🛡️ All allies gained ${shieldAmt} shield!`);
+      }
+      if (active.classCategory === 'Amplifier' && isEgo) {
+        const healPct = 0.15 + active.classEffect * 0.5 + synergyHealBonus + deptBonus.healBonus;
+        const healAmt = Math.max(3, Math.floor(dmg * healPct));
+        setIdentityStates((prev) =>
+          prev.map((s) => {
+            if (s.hp <= 0) return s;
+            return { ...s, hp: Math.min(s.maxHp, s.hp + healAmt) };
+          })
+        );
+        addLog(`💚 Amplifier Ego: all allies healed for ${healAmt} HP (${(healPct * 100).toFixed(0)}% of damage)`);
+      }
+      if (active.classCategory === 'Support' && isEgo) {
+        const healPct = 0.20 + active.classEffect + synergyHealBonus + deptBonus.healBonus;
+        const healAmt = Math.floor(dmg * healPct);
+        setIdentityStates((prev) =>
+          prev.map((s) => {
+            if (s.hp <= 0) return s;
+            return { ...s, hp: Math.min(s.maxHp, s.hp + healAmt) };
+          })
+        );
+        addLog(`💚 Support Ego: all allies healed for ${healAmt} HP (${(healPct * 100).toFixed(0)}% of damage)`);
+      }
+
+      if (isEgo) {
+        const identity = identities.find((i) => i.id === active.identityId);
+        if (identity && identity.transformedSkills?.length > 0) {
+          const triggerCtx = {
+            ultimateBar: active.ultimate,
+            isEgo: true,
+            stacks: { ultimate: active.ultimate },
+            enemyStacks: {},
+            allyCount: identityStates.length,
+            deadAllyCount: identityStates.filter((s) => s.hp <= 0).length,
+            totalEnemiesDefeated,
+          };
+          const shouldTrigger = checkTransformationTrigger(identity, triggerCtx);
+          if (shouldTrigger.shouldTrigger) {
+            const newSkills = buildTransformedSkills(identity, active.damageType, active.infusion);
+            setIdentityStates((prev) =>
+              prev.map((s, i) =>
+                i === activeIdentityIndex
+                  ? {
+                      ...s,
+                      ultimate: 0,
+                      transformedSkills: newSkills,
+                      transformationActive: true,
+                      transformationTurnsLeft: identity.ultimateDuration || 8,
+                    }
+                  : s
+              )
+            );
+            addLog(`🌹 ${identity.name} transformed! Skills replaced for ${identity.ultimateDuration || 8} turns.`);
+          }
         }
-        return;
       }
     } else {
       const diff = result.enemyTotal - result.playerTotal;
       const basePercent = 0.005 + 0.0015 * diff;
       let finalPercent = basePercent;
-      finalPercent *= (0.85 + Math.random() * 0.3);
+      finalPercent *= 0.85 + Math.random() * 0.3;
       finalPercent = Math.min(finalPercent, 0.15);
-      enemyDmg = Math.max(1, Math.floor(finalPercent * player.maxHp));
-      const newPlayerHp = Math.max(0, playerHp - enemyDmg);
-      setPlayerHp(newPlayerHp);
+      const enemyDmg = Math.max(1, Math.floor(finalPercent * active.maxHp));
+      const afterShield = Math.max(0, enemyDmg - active.shield);
+      setIdentityStates((prev) =>
+        prev.map((s, i) =>
+          i === activeIdentityIndex
+            ? {
+                ...s,
+                hp: Math.max(0, s.hp - afterShield),
+                shield: Math.max(0, s.shield - enemyDmg),
+              }
+            : s
+        )
+      );
+      addLog(`❌ ${active.name} lost clash! ${enemy.name} deals ${enemyDmg} damage.`);
       setClashData({ p: result.playerTotal, e: result.enemyTotal, won: false, dmg: enemyDmg, actorName: enemy.name });
-      const logMsg = `❌ ${enemy.name} dealt ${enemyDmg} damage to ${player.name}!`;
-      setCombatLog(prev => [...prev.slice(-20), logMsg]);
-      if (isCoop) {
-        sendAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: false, dmg: enemyDmg, actorName: enemy.name }, turn: 'resolve', log: logMsg });
+      if (active.classCategory === 'Amplifier' && afterShield > 0) {
+        setIdentityStates((prev) =>
+          prev.map((s) => {
+            if (s.hp <= 0) return s;
+            return { ...s, hp: Math.min(s.maxHp, s.hp + afterShield) };
+          })
+        );
+        addLog(`💚 Amplifier resonance: allies healed for ${afterShield} HP.`);
       }
-      if (newPlayerHp <= 0) {
+    }
+
+    if (!isEgo) {
+      setIdentityStates((prev) =>
+        prev.map((s, i) =>
+          i === activeIdentityIndex ? { ...s, sp: Math.max(0, s.sp - 10) } : s
+        )
+      );
+    } else {
+      setIdentityStates((prev) =>
+        prev.map((s, i) => (i === activeIdentityIndex ? { ...s, ultimate: 0 } : s))
+      );
+    }
+
+    setTurn('resolve');
+    if (gameMode === 'coop' && wsRef.current) {
+      sendAction('playerAction', {
+        selectedSkillIndex,
+        selectedEnemyIndex,
+      });
+    }
+  };
+
+  const resolvePhase = () => {
+    const aliveEnemies = enemies.filter((e) => e.currentHp > 0);
+    if (aliveEnemies.length === 0) {
+      const wave = selectedPlace.waves[currentWaveIndex];
+      const enemyCount = selectedPlace.waves[currentWaveIndex].enemies.length;
+      setTotalEnemiesDefeated((prev) => prev + enemyCount);
+      if (wave.isBoss) setBossesDefeated((prev) => prev + 1);
+      addLog(`🏁 Wave ${currentWaveIndex + 1} cleared!`);
+
+      if (currentWaveIndex < selectedPlace.waves.length - 1) {
+        const nextIdx = currentWaveIndex + 1;
+        setCurrentWaveIndex(nextIdx);
+        const nextWave = selectedPlace.waves[nextIdx];
+        const nextEnemies = nextWave.enemies
+          .map((id: string) => {
+            const raw = explorationEnemies[id];
+            if (!raw) return null;
+            return convertRawEnemy(raw, selectedPlace, selectedDifficulty);
+          })
+          .filter(Boolean) as ExplorationEnemy[];
+        setEnemies(nextEnemies);
+        addLog(`🌊 Wave ${nextIdx + 1}: ${nextWave.description}`);
+        if (nextEnemies.length > 0) {
+          addLog(`⚔️ Encountered ${nextEnemies.map((e) => e.name).join(', ')}!`);
+        }
+        const firstAlive = identityStates.findIndex((s) => s.hp > 0);
+        if (firstAlive !== -1) setActiveIdentityIndex(firstAlive);
+        setTurn('player');
+        setSelectedSkillIndex(0);
+        setSelectedEnemyIndex(0);
+        setClashData(null);
+        return;
+      } else {
+        addLog('🏆 Exploration complete!');
         setIsCombatFinished(true);
-        const finishLog = `💀 ${player.name} has fallen!`;
-        setCombatLog(prev => [...prev, finishLog]);
-        addFacilityLog(`${player.name} was defeated by ${enemy.name}!`, 'danger');
-        if (isCoop) {
-          sendAction('combatFinish', { abnoId: enemy.abnoId, won: false, initiator: user?.id, enemyName: enemy.name });
+        setPhase('victory');
+        const rawLunacy = selectedPlace.waves.reduce((sum: number, w: any) => sum + rand(w.rewards.lunacy.min, w.rewards.lunacy.max), 0);
+        const rawExp = selectedPlace.waves.reduce((sum: number, w: any) => sum + rand(w.rewards.exp.min, w.rewards.exp.max), 0);
+        const bonus = computeDepartmentBonus(facility);
+        const totalLunacy = Math.floor(rawLunacy * bonus.rewardMultiplier);
+        const totalExp = Math.floor(rawExp * bonus.rewardMultiplier);
+        const threads = selectedPlace.waves.some((w: any) => w.rewards.threads) ? Math.floor(totalLunacy / 50) : 0;
+        const sigils = Math.floor(Math.random() * 3);
+        const eclipse = Math.floor(Math.random() * 2);
+        addEnkephalin(totalLunacy);
+        addManagerExp(totalExp);
+        if (threads > 0) addThreads(threads);
+        if (sigils > 0) addHarmonizationSigils(sigils);
+        if (eclipse > 0) addEclipseResonanceMaterials(eclipse);
+        setFinalScore(totalLunacy + totalExp * 10);
+        addLog(`💰 Gained ${totalLunacy}⚡ Enkephalin, ${totalExp}🌟 Manager EXP${threads > 0 ? `, ${threads}🧵 Threads` : ''}${sigils > 0 ? `, ${sigils}💎 Sigils` : ''}${eclipse > 0 ? `, ${eclipse}✨ Eclipse Mats` : ''}!`);
+        setRewardsClaimed(true);
+        setTurn('finished');
+        if (gameMode === 'coop' && wsRef.current) {
+          sendAction('explorationFinished', { score: finalScore });
         }
         return;
       }
     }
-    setCombatTurn('resolve');
+
+    setTurn('enemy');
+    if (gameMode === 'coop' && wsRef.current) {
+      sendAction('resolve', {});
+    }
+    setTimeout(() => {
+      executeEnemyTurn();
+    }, 500);
   };
 
-  const resolveCombat = () => {
-    if (enemyHp <= 0) return;
-    setCombatTurn('enemy');
-    setTimeout(() => {
-      const enemy = combatEnemy;
-      const player = combatPlayer;
-      if (!enemy || !player) return;
+  const executeEnemyTurn = () => {
+    const aliveEnemies = enemies.filter((e) => e.currentHp > 0);
+    const aliveIdentities = identityStates.filter((s) => s.hp > 0);
+    if (aliveIdentities.length === 0) {
+      addLog('💀 All identities defeated.');
+      setIsCombatFinished(true);
+      setPhase('defeat');
+      setTurn('finished');
+      return;
+    }
+
+    for (const enemy of aliveEnemies) {
+      const targetIdx = Math.floor(Math.random() * aliveIdentities.length);
+      const target = aliveIdentities[targetIdx];
+      const realIdx = identityStates.findIndex((s) => s.identityId === target.identityId);
+      if (realIdx === -1) continue;
+
       const eSkill = enemy.skills[Math.floor(Math.random() * enemy.skills.length)];
-      const playerDefense = player.def > 0 ? player.def : 30;
-      const playerTotal = 5 + Math.floor(playerDefense / 10);
       let enemyTotal = 0;
       for (let c = 0; c < eSkill.coins; c++) {
         enemyTotal += rollCoin(eSkill.power);
       }
+      const playerDefense = target.def > 0 ? target.def : 30;
+      const playerTotal = 5 + Math.floor(playerDefense / 10);
       const diff = enemyTotal - playerTotal;
-      let dmg = 0;
       if (diff > 0) {
         const basePercent = 0.005 + 0.0015 * diff;
         let finalPercent = basePercent;
-        finalPercent *= (0.85 + Math.random() * 0.3);
+        finalPercent *= 0.85 + Math.random() * 0.3;
         finalPercent = Math.min(finalPercent, 0.12);
-        dmg = Math.max(1, Math.floor(finalPercent * player.maxHp));
-        const newPlayerHp = Math.max(0, playerHp - dmg);
-        setPlayerHp(newPlayerHp);
-        const logMsg = `👊 ${enemy.name} attacks for ${dmg} damage.`;
-        setCombatLog(prev => [...prev.slice(-20), logMsg]);
-        if (isCoop) {
-          sendAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
+        const dmg = Math.max(1, Math.floor(finalPercent * target.maxHp));
+        const afterShield = Math.max(0, dmg - target.shield);
+        setIdentityStates((prev) =>
+          prev.map((s, i) =>
+            i === realIdx
+              ? {
+                  ...s,
+                  hp: Math.max(0, s.hp - afterShield),
+                  shield: Math.max(0, s.shield - dmg),
+                }
+              : s
+          )
+        );
+        addLog(`👊 ${enemy.name} attacks ${target.name} for ${dmg} damage.`);
+        if (target.classCategory === 'Amplifier' && afterShield > 0) {
+          setIdentityStates((prev) =>
+            prev.map((s) => {
+              if (s.hp <= 0) return s;
+              return { ...s, hp: Math.min(s.maxHp, s.hp + afterShield) };
+            })
+          );
+          addLog(`💚 Amplifier resonance: allies healed for ${afterShield} HP.`);
         }
-        if (newPlayerHp <= 0) {
-          setIsCombatFinished(true);
-          setCombatLog(prev => [...prev, `💀 ${player.name} has fallen!`]);
-          addFacilityLog(`${player.name} was defeated by ${enemy.name}!`, 'danger');
-          if (isCoop) {
-            sendAction('combatFinish', { abnoId: enemy.abnoId, won: false, initiator: user?.id, enemyName: enemy.name });
-          }
-          return;
+        if (identityStates[realIdx].hp <= 0) {
+          addLog(`💀 ${target.name} has fallen!`);
         }
       } else {
-        const logMsg = `🛡️ ${player.name} blocked the attack.`;
-        setCombatLog(prev => [...prev.slice(-20), logMsg]);
-        if (isCoop) {
-          sendAction('combatAction', { playerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
-        }
+        addLog(`🛡️ ${target.name} blocked ${enemy.name}'s attack.`);
       }
-      setCombatTurn('player');
-      setClashData(null);
-    }, 800);
+    }
+
+    const anyAlive = identityStates.some((s) => s.hp > 0);
+    if (!anyAlive) {
+      addLog('💀 All identities defeated. Exploration failed.');
+      setIsCombatFinished(true);
+      setPhase('defeat');
+      setTurn('finished');
+      return;
+    }
+
+    const nextAlive = identityStates.findIndex((s, i) => i > activeIdentityIndex && s.hp > 0);
+    if (nextAlive === -1) {
+      const firstAlive = identityStates.findIndex((s) => s.hp > 0);
+      if (firstAlive !== -1) setActiveIdentityIndex(firstAlive);
+    } else {
+      setActiveIdentityIndex(nextAlive);
+    }
+    setTurn('player');
+    setClashData(null);
+    setSelectedSkillIndex(0);
   };
 
-  // ─── Early return if no facility ──────────────────────────────────
-  if (!isHydrated) {
-    return (
-      <div className="p-8 max-w-2xl mx-auto text-center">
-        <p className="text-cyan-400 animate-pulse">Loading facility data...</p>
-      </div>
-    );
-  }
+  const retreat = () => {
+    if (isCombatFinished) {
+      resetExploration();
+      return;
+    }
+    addLog('🏳️ You retreated from the exploration.');
+    if (gameMode === 'coop' && wsRef.current) {
+      sendAction('retreat', {});
+    }
+    resetExploration();
+  };
 
-  if (!facility || !facility.isActive) {
-    return (
-      <div className="p-8 max-w-2xl mx-auto">
-        <h2 className="text-2xl font-bold text-cyan-400 mb-4">🏢 Facility Management</h2>
-        <p className="text-gray-400 mb-6">You don't have a facility yet. Create one to start managing abnormalities!</p>
+  const resetExploration = () => {
+    setSelectedPlace(null);
+    setSelectedDifficulty('Normal');
+    setPhase('lobby');
+    setRoomPhase('lobby');
+    setEnemies([]);
+    setIdentityStates([]);
+    setLog(['🗺️ Choose a location to explore.']);
+    setIsCombatFinished(false);
+    setRewardsClaimed(false);
+    setFinalScore(null);
+    setShowDifficultySelector(false);
+    setPendingPlace(null);
+    if (gameMode === 'coop' && wsRef.current) {
+      sendAction('leaveExplorationRoom', {});
+      disconnectWebSocket();
+    }
+    setIsHost(false);
+    setRoomId(null);
+    setPlayers([]);
+  };
 
-        <div className="mb-6 p-3 border border-red-500/30 bg-red-500/10 rounded-lg">
-          <p className="text-red-400 text-sm mb-2">⚠️ Stuck? Use emergency leave:</p>
+  const handlePlaceClick = (place: any) => {
+    if (team.length === 0) {
+      addLog('⚠️ Select at least one identity first.');
+      return;
+    }
+    setPendingPlace(place);
+    setShowDifficultySelector(true);
+  };
+
+  const selectDifficulty = (difficulty: string) => {
+    if (pendingPlace) {
+      startSoloExploration(pendingPlace, team, difficulty);
+    }
+  };
+
+  const cancelDifficultySelection = () => {
+    setShowDifficultySelector(false);
+    setPendingPlace(null);
+  };
+
+  // ─── RENDER: LOBBY ──────────────────────────────────────────────────
+  if (phase === 'lobby' && roomPhase === 'lobby') {
+    return (
+      <div className="space-y-4 max-w-4xl mx-auto">
+        <div className="border border-cyan-500/30 bg-gray-900/80 p-4 rounded-lg">
+          <h2 className="text-xl font-mono font-bold text-cyan-400">🗺️ EXPLORATION MODE</h2>
+          <p className="text-sm text-gray-400 mt-1">Select game mode and a location.</p>
+        </div>
+
+        <div className="flex gap-4 mb-4">
           <button
-            onClick={handleForceLeave}
-            disabled={isForceLeaving}
-            className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-500 hover:text-white transition disabled:opacity-50"
+            onClick={() => setGameMode('solo')}
+            className={`px-6 py-3 font-mono font-bold border transition-all ${gameMode === 'solo' ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400 hover:border-cyan-400/50'}`}
+            style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
           >
-            {isForceLeaving ? 'Processing...' : '🚪 Emergency Leave'}
+            🎮 SOLO (up to 3 identities)
+          </button>
+          <button
+            onClick={() => setGameMode('coop')}
+            className={`px-6 py-3 font-mono font-bold border transition-all ${gameMode === 'coop' ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400 hover:border-cyan-400/50'}`}
+            style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+          >
+            🌐 CO-OP (up to 3 players)
           </button>
         </div>
 
-        <div className="flex gap-2 mb-4">
-          <button
-            onClick={() => setIsCoop(false)}
-            className={`px-4 py-2 border rounded ${!isCoop ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400'}`}
-          >
-            🎮 Solo
-          </button>
-          <button
-            onClick={() => setIsCoop(true)}
-            className={`px-4 py-2 border rounded ${isCoop ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400'}`}
-          >
-            🌐 Co‑op
-          </button>
-        </div>
+        {gameMode === 'solo' && (
+          <>
+            <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+              <h3 className="text-sm font-mono font-bold text-gray-400 mb-2">SELECT IDENTITIES (max 3)</h3>
+              <div className="flex flex-wrap gap-2">
+                {ownedIdentities.map((o) => {
+                  const identity = identities.find((i) => i.id === o.identityId);
+                  if (!identity) return null;
+                  const isSelected = team.includes(o.identityId);
+                  return (
+                    <button
+                      key={o.identityId}
+                      onClick={() => {
+                        const newTeam = isSelected ? team.filter((id) => id !== o.identityId) : [...team, o.identityId];
+                        if (newTeam.length > 3) {
+                          addLog('⚠️ You can only select up to 3 identities.');
+                          return;
+                        }
+                        useGameStore.setState({ team: newTeam });
+                      }}
+                      className={`px-3 py-1 text-xs font-mono border transition-all ${isSelected ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400 hover:border-cyan-400/50'}`}
+                      style={{ clipPath: 'polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px))' }}
+                    >
+                      {identity.portrait} {identity.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-gray-500 mt-2">Current team: {team.join(', ')}</p>
+            </div>
 
-        {isCoop ? (
-          <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
-            <h3 className="text-sm font-bold text-cyan-400 mb-2">🌐 Co‑op Lobby</h3>
-            <p className="text-sm text-gray-400 mb-4">Create a room or join by code.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {explorationPlaces.map((place) => (
+                <div
+                  key={place.id}
+                  onClick={() => handlePlaceClick(place)}
+                  className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg cursor-pointer hover:border-cyan-400 transition-all"
+                >
+                  <div className="flex items-start gap-3">
+                    <span className="text-3xl">🗺️</span>
+                    <div className="flex-1">
+                      <p className="font-bold text-white">{place.name}</p>
+                      <p className="text-xs text-gray-400 line-clamp-2">{place.description}</p>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] text-gray-500">{place.waves.length} waves</span>
+                    <span className="text-[10px] text-gray-500">👥 {place.minMembers}-{place.maxMembers} members</span>
+                  </div>
+                  <div className="mt-2 flex gap-3 text-xs text-gray-400">
+                    <span>⚡ ~{place.waves.reduce((s, w) => s + Math.floor((w.rewards.lunacy.min + w.rewards.lunacy.max)/2), 0)}</span>
+                    <span>🌟 ~{place.waves.reduce((s, w) => s + Math.floor((w.rewards.exp.min + w.rewards.exp.max)/2), 0)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {gameMode === 'coop' && (
+          <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+            <h3 className="text-sm font-mono font-bold text-gray-400 mb-2">🌐 CO-OP LOBBY</h3>
+            <p className="text-sm text-gray-400 mb-4">Select your identity, then create or join a room.</p>
+            <div className="mb-4">
+              <label className="text-xs uppercase tracking-wider text-[#4a5568] block mb-1">Your Identity</label>
+              <select
+                className="w-full bg-gray-800 border border-gray-700 px-3 py-2 text-white focus:border-cyan-400 outline-none rounded"
+                style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px))' }}
+                value={selectedCoopIdentityId}
+                onChange={(e) => setSelectedCoopIdentityId(e.target.value)}
+              >
+                {ownedIdentities.map((o) => {
+                  const identity = identities.find((i) => i.id === o.identityId);
+                  if (!identity) return null;
+                  return (
+                    <option key={o.identityId} value={o.identityId}>
+                      {identity.portrait} {identity.name}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
             <div className="flex flex-col gap-3">
               <div className="flex gap-2 items-center">
                 <input
                   type="text"
                   placeholder="Room Code (empty = auto-generate)"
                   className="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 text-white focus:border-cyan-400 outline-none rounded"
-                  id="roomCodeInput"
+                  id="explorationRoomCodeInput"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       const input = e.target as HTMLInputElement;
                       const code = input.value.trim();
                       if (code) {
-                        joinDepartmentRoom(code);
+                        joinRoom(code);
                       } else {
-                        const deptId = Object.keys(DEPARTMENTS)[0] as DepartmentId;
-                        createDepartmentRoom(deptId);
+                        createRoom(explorationPlaces[0]?.id || '');
                       }
                     }
                   }}
                 />
                 <button
                   onClick={() => {
-                    const input = document.getElementById('roomCodeInput') as HTMLInputElement;
+                    const input = document.getElementById('explorationRoomCodeInput') as HTMLInputElement;
                     const code = input.value.trim();
                     if (code) {
-                      joinDepartmentRoom(code);
+                      joinRoom(code);
                     } else {
-                      const deptId = Object.keys(DEPARTMENTS)[0] as DepartmentId;
-                      createDepartmentRoom(deptId);
+                      createRoom(explorationPlaces[0]?.id || '');
                     }
                   }}
                   className="px-4 py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
@@ -901,1057 +1292,369 @@ export default function DepartmentView() {
               )}
             </div>
           </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {Object.values(DEPARTMENTS).map(dept => (
-              <button
-                key={dept.id}
-                onClick={async () => {
-                  if (isCreating) return;
-                  setIsCreating(true);
-                  const result = createFacility(dept.id, user?.id || 'guest');
-                  if (result.success) {
-                    alert(`✅ ${dept.name} facility created!`);
-                    setIsCreating(false);
-                    window.location.reload();
-                  } else {
-                    alert(`❌ ${result.reason}`);
-                    setIsCreating(false);
-                  }
-                }}
-                className="p-3 border border-gray-700 rounded hover:border-cyan-400 transition text-left disabled:opacity-50"
-                style={{ borderColor: dept.color }}
-                disabled={isCreating}
-              >
-                <span className="text-lg">{dept.icon}</span>
-                <span className="text-white font-bold ml-2">{dept.name}</span>
-                <p className="text-xs text-gray-400 mt-1">Unlocks Day {dept.unlockDay} · {dept.maxAbnormalities} abno/day</p>
-              </button>
-            ))}
+        )}
+
+        {showDifficultySelector && pendingPlace && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="bg-gray-900 border border-cyan-500/30 p-6 rounded-lg max-w-md w-full">
+              <h3 className="text-lg font-bold text-cyan-400 mb-2">⚙️ SELECT DIFFICULTY</h3>
+              <p className="text-sm text-gray-400 mb-4">
+                Choose difficulty for <span className="text-white font-bold">{pendingPlace.name}</span>
+              </p>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                {['Easy', 'Normal', 'Hard', 'Very Hard'].map((diff) => (
+                  <button
+                    key={diff}
+                    onClick={() => selectDifficulty(diff)}
+                    className={`p-3 border transition-all ${difficultyColor(diff)} hover:border-cyan-400 hover:bg-cyan-400/10`}
+                    style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px))' }}
+                  >
+                    <div className="text-sm font-bold">{diff}</div>
+                    <div className="text-[10px] text-gray-500">
+                      {diff === 'Easy' ? 'Relaxed' : diff === 'Normal' ? 'Standard' : diff === 'Hard' ? 'Challenging' : 'Brutal'}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={cancelDifficultySelection}
+                  className="px-4 py-2 border border-gray-600 text-gray-400 rounded hover:border-red-400 hover:text-red-400 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         )}
-        <button
-          onClick={() => joinFacility(user?.id || 'guest')}
-          className="mt-4 px-4 py-2 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
-          disabled={isCreating}
-        >
-          Join Existing Facility
-        </button>
       </div>
     );
   }
 
-  const deptConfig = DEPARTMENTS[facility.departmentKey as DepartmentId];
-  const isManager = facility.managerId === user?.id;
-  const maxDeploy = deptConfig?.maxAbnosPerDay || 1;
-  const requiredEnergy = getRequiredEnergyForDay(facility.currentDay);
-  const canAdvance = facility.energy >= requiredEnergy;
-
-  // ─── Render: Dashboard ─────────────────────────────────────────────
-  const renderDashboard = () => {
-    const boost = facility.activeBoost;
-    const boostRemaining = boost ? Math.floor((boost.expiresAt - Date.now()) / 1000) : 0;
-    const boostActive = boost && boostRemaining > 0;
-
-    const identityOptions = ownedIdentities.map(o => ({
-      id: o.identityId,
-      name: identities.find(i => i.id === o.identityId)?.name || o.identityId,
-      portrait: identities.find(i => i.id === o.identityId)?.portrait || '👤',
-    }));
-
-    const HpBar = ({ value, max, color = 'green', label }: any) => {
-      const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
-      const colorClass = color === 'green' ? 'bg-green-500' : color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-blue-500';
-      return (
-        <div className="w-full">
-          {label && <div className="flex justify-between text-xs text-gray-400"><span>{label}</span><span>{Math.round(pct)}%</span></div>}
-          <div className="h-2 bg-gray-700 rounded overflow-hidden">
-            <div className={`h-full transition-all duration-300 ${colorClass}`} style={{ width: `${pct}%` }} />
-          </div>
-        </div>
-      );
-    };
-
+  // ─── RENDER: CO-OP ROOM LOBBY ──────────────────────────────────────
+  if (roomPhase === 'placeSelect' || roomPhase === 'difficultySelect') {
+    const isPlaceSelect = roomPhase === 'placeSelect';
     return (
-      <div className="space-y-4">
-        {/* Stats Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="border border-gray-700 bg-gray-800/50 p-3 rounded text-center">
-            <p className="text-xs text-gray-400">Day</p>
-            <p className="text-2xl font-bold text-white">{facility.currentDay}</p>
+      <div className="space-y-4 max-w-4xl mx-auto">
+        <div className="border border-cyan-500/30 bg-gray-900/80 p-4 rounded-lg flex justify-between items-center">
+          <div>
+            <h3 className="text-lg font-mono font-bold text-cyan-400">
+              {isPlaceSelect ? '📍 SELECT PLACE' : '⚙️ SELECT DIFFICULTY'}
+            </h3>
+            <p className="text-sm text-gray-400">
+              {isPlaceSelect
+                ? 'Choose a location to explore with your party.'
+                : `Host: select difficulty for ${selectedPlace?.name}`}
+            </p>
           </div>
-          <div className="border border-gray-700 bg-gray-800/50 p-3 rounded text-center">
-            <p className="text-xs text-gray-400">Energy</p>
-            <p className="text-xl font-bold text-cyan-400">{facility.energy} / {facility.maxEnergy}</p>
-            <HpBar value={facility.energy} max={facility.maxEnergy} color="cyan" />
-          </div>
-          <div className="border border-gray-700 bg-gray-800/50 p-3 rounded text-center">
-            <p className="text-xs text-gray-400">Qliphoth Level</p>
-            <p className="text-2xl font-bold text-amber-400">{facility.qliphothLevel}</p>
-          </div>
-          <div className="border border-gray-700 bg-gray-800/50 p-3 rounded text-center">
-            <p className="text-xs text-gray-400">Members</p>
-            <p className="text-2xl font-bold text-white">{facility.members.length}</p>
-            {isCoop && <p className="text-xs text-cyan-400">🌐 Co‑op</p>}
+          <div className="text-right">
+            <span className="text-xs text-gray-400">Players: {players.map(p => p.name).join(', ')}</span>
+            {isHost && <span className="text-xs text-cyan-400 block">You are the host</span>}
+            {!isHost && <span className="text-xs text-amber-400 block">Waiting for host...</span>}
           </div>
         </div>
 
-        {/* Identity Selection */}
-        <div className="border border-cyan-500/20 bg-cyan-500/5 p-3 rounded">
-          <p className="text-xs text-gray-400 mb-1">Select an identity for work & combat:</p>
-          <div className="flex flex-wrap gap-2">
-            {identityOptions.map(opt => (
-              <button
-                key={opt.id}
-                onClick={() => setSelectedIdentityId(opt.id)}
-                className={`px-3 py-1 text-sm font-mono border rounded transition ${
-                  selectedIdentityId === opt.id
-                    ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400'
-                    : 'border-gray-700 text-gray-400 hover:border-cyan-400/50'
-                }`}
-              >
-                {opt.portrait} {opt.name}
-              </button>
-            ))}
-          </div>
-          {selectedIdentityId && (
-            <div className="mt-2 text-xs text-gray-400">
-              {(() => {
-                const stats = getAgentStats();
-                if (!stats) return 'Stats not available.';
-                return (
-                  <div className="flex flex-wrap gap-3">
-                    <span>HP: <span className="text-green-400">{stats.maxHp}</span></span>
-                    <span>SP: <span className="text-blue-400">{stats.maxSp}</span></span>
-                    <span>ATK: <span className="text-red-400">{stats.atk}</span></span>
-                    <span>DEF: <span className="text-yellow-400">{stats.def}</span></span>
-                    <span>Work Bonus: <span className="text-purple-400">+{Math.round((stats.workSuccess - 1) * 100)}%</span></span>
+        {isPlaceSelect ? (
+          <>
+            {isHost ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {explorationPlaces.map((place) => (
+                  <div
+                    key={place.id}
+                    onClick={() => {
+                      setSelectedPlace(place);
+                      setRoomPhase('difficultySelect');
+                    }}
+                    className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg cursor-pointer hover:border-cyan-400 transition-all"
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className="text-3xl">🗺️</span>
+                      <div className="flex-1">
+                        <p className="font-bold text-white">{place.name}</p>
+                        <p className="text-xs text-gray-400 line-clamp-2">{place.description}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-gray-500">{place.waves.length} waves</span>
+                      <span className="text-[10px] text-gray-500">👥 {place.minMembers}-{place.maxMembers} members</span>
+                    </div>
+                    <div className="mt-2 flex gap-3 text-xs text-gray-400">
+                      <span>⚡ ~{place.waves.reduce((s, w) => s + Math.floor((w.rewards.lunacy.min + w.rewards.lunacy.max)/2), 0)}</span>
+                      <span>🌟 ~{place.waves.reduce((s, w) => s + Math.floor((w.rewards.exp.min + w.rewards.exp.max)/2), 0)}</span>
+                    </div>
                   </div>
-                );
-              })()}
-            </div>
-          )}
-        </div>
-
-        {/* Boost Active */}
-        {boostActive && (
-          <div className="border border-green-500/30 bg-green-500/10 p-3 rounded flex items-center gap-2">
-            <span className="text-2xl">📈</span>
-            <div>
-              <p className="text-green-400 font-bold">Temperance Boost Active!</p>
-              <p className="text-xs text-gray-400">+50% Temperance · {Math.floor(boostRemaining / 60)}:{String(boostRemaining % 60).padStart(2, '0')} remaining</p>
-            </div>
-          </div>
-        )}
-
-        {/* Active Ordeal */}
-        {facility.activeOrdeal && (
-          <div className="border border-red-500/30 bg-red-500/10 p-3 rounded">
-            <p className="text-red-400 font-bold">⚠️ ORDEAL IN PROGRESS</p>
-            <p className="text-white">{facility.activeOrdeal.name}</p>
-            <div className="flex gap-2 mt-2">
-              <button
-                onClick={() => {
-                  if (isCoop) {
-                    sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: true });
-                  } else {
-                    resolveOrdeal(facility.activeOrdeal!.id, true);
-                    addFacilityLog(`${getDisplayName(user)} resolved ordeal: Victory`, 'success');
-                  }
-                }}
-                className="px-3 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded text-sm hover:bg-red-400 hover:text-gray-900 transition"
-              >
-                Resolve (Victory)
-              </button>
-              <button
-                onClick={() => {
-                  if (isCoop) {
-                    sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: false });
-                  } else {
-                    resolveOrdeal(facility.activeOrdeal!.id, false);
-                    addFacilityLog(`${getDisplayName(user)} resolved ordeal: Defeat`, 'danger');
-                  }
-                }}
-                className="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600 transition"
-              >
-                Resolve (Defeat)
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Action Buttons */}
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => setView('deploy')}
-            className="px-4 py-2 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
-          >
-            📦 Deploy Abnormality
-          </button>
-          <button
-            onClick={() => setView('work')}
-            className="px-4 py-2 bg-green-500/20 border border-green-400 text-green-400 rounded hover:bg-green-400 hover:text-gray-900 transition"
-          >
-            🔨 Work
-          </button>
-          <button
-            onClick={() => setView('research')}
-            className="px-4 py-2 bg-purple-500/20 border border-purple-400 text-purple-400 rounded hover:bg-purple-400 hover:text-gray-900 transition"
-          >
-            🔬 Research
-          </button>
-          <button
-            onClick={() => setView('missions')}
-            className="px-4 py-2 bg-amber-500/20 border border-amber-400 text-amber-400 rounded hover:bg-amber-400 hover:text-gray-900 transition"
-          >
-            📜 Missions
-          </button>
-          {isManager && (
-            <button
-              onClick={() => setView('bullets')}
-              className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition"
-            >
-              🔫 Bullets
-            </button>
-          )}
-          {isManager && facility.memoryRepositoryAvailable && (
-            <button
-              onClick={() => setView('memory')}
-              className="px-4 py-2 bg-indigo-500/20 border border-indigo-400 text-indigo-400 rounded hover:bg-indigo-400 hover:text-gray-900 transition"
-            >
-              🔄 Memory
-            </button>
-          )}
-          <button
-            onClick={() => {
-              if (!canAdvance) {
-                alert(`❌ Need ${requiredEnergy} energy to advance`);
-                return;
-              }
-              if (isCoop) {
-                sendAction('advanceDay', {});
-              } else {
-                const result = advanceDay();
-                if (result.success) {
-                  addFacilityLog(`${getDisplayName(user)} advanced to Day ${result.newDay}`, 'success');
-                  if (result.ordeal) addFacilityLog(`Ordeal triggered: ${result.ordeal.name}`, 'warning');
-                  alert(`✅ Advanced to Day ${result.newDay}`);
-                  if (result.ordeal) alert(`⚠️ Ordeal triggered: ${result.ordeal.name}`);
-                } else alert(`❌ ${result.reason}`);
-              }
-            }}
-            className={`px-4 py-2 border rounded transition ${canAdvance ? 'border-amber-400 text-amber-400 hover:bg-amber-400 hover:text-gray-900' : 'border-gray-600 text-gray-500 cursor-not-allowed'}`}
-          >
-            ➡️ Advance Day ({requiredEnergy}⚡)
-          </button>
-
-          {/* ─── LEAVE / DISBAND BUTTON ─── */}
-          <button
-            onClick={() => {
-              const isManager = facility.managerId === user?.id;
-              if (isManager) {
-                setShowDisbandConfirm(true);
-                return;
-              }
-              const confirmMsg = 'Are you sure you want to leave the facility?';
-              if (confirm(confirmMsg)) {
-                const result = leaveFacility(user?.id || 'guest');
-                if (result.success) {
-                  if (isCoop && wsRef.current) {
-                    sendAction('leaveDepartmentRoom', {});
-                    disconnectWebSocket();
-                  }
-                  useGameStore.setState((state) => ({
-                    facility: {
-                      ...state.facility,
-                      isActive: false,
-                      name: '',
-                      managerId: null,
-                      departmentKey: null,
-                      currentDay: 1,
-                      energy: 0,
-                      maxEnergy: 100,
-                      members: [],
-                      deployedAbnos: [],
-                      deployedToday: [],
-                      unlockedResearch: [],
-                      completedMissions: [],
-                      missionProgress: {},
-                      log: [],
-                    },
-                  }));
-                  setIsCoop(false);
-                  setRoomId(null);
-                  setPlayers([]);
-                  setIsHost(false);
-                  setView('dashboard');
-                } else {
-                  alert(`❌ ${result.reason}`);
-                }
-              }
-            }}
-            className={`px-4 py-2 border rounded transition ${
-              facility.managerId === user?.id
-                ? 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900'
-                : 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900'
-            }`}
-          >
-            {facility.managerId === user?.id ? '💥 Disband Facility' : '🚪 Leave Facility'}
-          </button>
-
-          {/* ─── EMERGENCY LEAVE ─── */}
-          <button
-            onClick={handleForceLeave}
-            disabled={isForceLeaving}
-            className="px-4 py-2 border border-red-500/30 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50 text-xs"
-          >
-            {isForceLeaving ? 'Processing...' : '🚪 Emergency Leave'}
-          </button>
-        </div>
-
-        {/* Disband Confirmation Overlay */}
-        {showDisbandConfirm && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-gray-900 border border-red-500/30 p-6 rounded-lg max-w-md w-full">
-              <h3 className="text-lg font-bold text-red-400">💥 Disband Facility?</h3>
-              <p className="text-sm text-gray-300 mt-2">
-                {isCoop
-                  ? 'This will disband the room and force all players to leave. Are you sure?'
-                  : 'This will permanently delete your facility and all progress. Are you sure?'}
-              </p>
-              <div className="flex gap-3 mt-4">
-                <button
-                  onClick={() => setShowDisbandConfirm(false)}
-                  className="px-4 py-2 border border-gray-600 text-gray-400 rounded hover:bg-gray-700 transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={disbandRoom}
-                  className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition"
-                >
-                  Disband
-                </button>
+                ))}
               </div>
-            </div>
-          </div>
+            ) : (
+              <div className="border border-amber-500/30 bg-amber-500/5 p-8 text-center rounded-lg">
+                <p className="text-amber-400 font-bold text-lg">⏳ Waiting for host to choose a place...</p>
+                <p className="text-gray-400 text-sm mt-2">The host will select a location and difficulty.</p>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {isHost ? (
+              <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+                <h3 className="text-sm font-mono font-bold text-gray-400 mb-3">Select Difficulty</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {['Easy', 'Normal', 'Hard', 'Very Hard'].map((diff) => (
+                    <button
+                      key={diff}
+                      onClick={() => setSelectedDifficulty(diff)}
+                      className={`p-3 border transition-all ${
+                        selectedDifficulty === diff
+                          ? `border-cyan-400 bg-cyan-400/10 text-cyan-400`
+                          : 'border-gray-700 bg-gray-900/50 text-gray-400 hover:border-cyan-400/50'
+                      }`}
+                      style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px))' }}
+                    >
+                      <span className={`text-xs font-mono font-bold ${difficultyColor(diff)}`}>{diff}</span>
+                      <p className="text-[10px] text-gray-500">
+                        {diff === 'Easy' ? 'Relaxed' : diff === 'Normal' ? 'Standard' : diff === 'Hard' ? 'Challenging' : 'Brutal'}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-4 flex gap-3">
+                  <button
+                    onClick={startExploration}
+                    disabled={!selectedPlace || !selectedDifficulty}
+                    className="px-6 py-2 bg-green-500/20 border border-green-400 text-green-400 font-mono font-bold hover:bg-green-400 hover:text-gray-900 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+                  >
+                    ⚔️ START EXPLORATION ({selectedDifficulty})
+                  </button>
+                  <button
+                    onClick={() => setRoomPhase('placeSelect')}
+                    className="px-4 py-2 border border-gray-600 text-gray-400 rounded hover:border-cyan-400 hover:text-cyan-400 transition"
+                  >
+                    ← Back to Places
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="border border-amber-500/30 bg-amber-500/5 p-8 text-center rounded-lg">
+                <p className="text-amber-400 font-bold text-lg">⏳ Host is choosing difficulty...</p>
+                <p className="text-gray-400 text-sm mt-2">The host will start the exploration when ready.</p>
+              </div>
+            )}
+          </>
         )}
 
-        {/* Deployed Abnormalities */}
-        <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
-          <h3 className="text-sm font-bold text-white mb-2">📋 Deployed Abnormalities</h3>
-          {facility.deployedAbnos.length === 0 ? (
-            <p className="text-gray-400 text-sm">No abnormalities deployed.</p>
+        <div className="flex gap-3">
+          {isHost ? (
+            <button
+              onClick={disbandRoom}
+              className="px-4 py-2 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition"
+            >
+              💥 Disband Room
+            </button>
           ) : (
-            <div className="space-y-2">
-              {facility.deployedAbnos.map((abno: any) => {
-                const isBreaching = abno.qliphothCounter <= 0;
-                const riskEmoji = getRiskEmoji(abno.risk);
-                return (
-                  <div key={abno.abnoId} className={`border p-3 rounded ${isBreaching ? 'border-red-500/50 bg-red-500/10' : 'border-gray-700 bg-gray-800/50'}`}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">{riskEmoji}</span>
-                        <span className="text-white font-bold">{abno.abnoName}</span>
-                        <span className="text-xs text-gray-400">{abno.risk}</span>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs text-gray-400">Qliphoth</p>
-                        <div className="w-24">
-                          <HpBar value={abno.qliphothCounter} max={abno.maxCounter} color={isBreaching ? 'red' : 'amber'} />
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex gap-2 mt-2">
-                      {isBreaching ? (
-                        <button
-                          onClick={() => {
-                            if (!selectedIdentityId) {
-                              alert('Please select an identity first.');
-                              return;
-                            }
-                            const stats = getAgentStats();
-                            if (!stats) {
-                              alert('Could not get agent stats.');
-                              return;
-                            }
-                            const abnoData = getAbnormalityById(abno.abnoId);
-                            if (!abnoData) return;
-                            const enemySkills = abnoData.combatPages?.map(p => ({
-                              name: p.name,
-                              power: p.basePower || p.min || 5,
-                              coins: p.coins || 1,
-                              damageType: p.damageType || 'Red',
-                              infusion: p.infusion || 'Slash',
-                            })) || [{ name: 'Strike', power: 5, coins: 1, damageType: 'Red', infusion: 'Slash' }];
-                            const enemy = {
-                              name: abnoData.name,
-                              hp: abnoData.hp || 100,
-                              maxHp: abnoData.hp || 100,
-                              atk: abnoData.atk || 10,
-                              def: abnoData.def || 5,
-                              damageType: 'Red',
-                              infusion: 'Slash',
-                              resistDamageType: 'Pale',
-                              resistInfusion: 'Pierce',
-                              skills: enemySkills,
-                              abnoId: abno.abnoId,
-                            };
-                            const player = {
-                              name: identities.find(i => i.id === selectedIdentityId)?.name || 'Agent',
-                              hp: stats.maxHp,
-                              maxHp: stats.maxHp,
-                              atk: stats.atk,
-                              def: stats.def,
-                              damageType: stats.damageType,
-                              infusion: stats.infusion,
-                              skills: stats.skills,
-                            };
-                            setCombatEnemy(enemy);
-                            setCombatPlayer(player);
-                            setPlayerHp(player.hp);
-                            setPlayerMaxHp(player.maxHp);
-                            setEnemyHp(enemy.hp);
-                            setEnemyMaxHp(enemy.maxHp);
-                            setCombatTurn('player');
-                            setSelectedSkillIndex(0);
-                            setClashData(null);
-                            setCombatLog(['⚔️ Breach combat started!']);
-                            setIsCombatFinished(false);
-                            setCombatInitiator(user?.id || null);
-                            setView('combat');
-                            if (isCoop && wsRef.current) {
-                              sendAction('startCombat', { enemy, player, abnoId: abno.abnoId, initiator: user?.id });
-                            }
-                          }}
-                          className="text-xs px-2 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition"
-                        >
-                          ⚔️ Suppress Breach (Global)
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setSelectedAbnoId(abno.abnoId);
-                            setView('work');
-                          }}
-                          className="text-xs px-2 py-1 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
-                        >
-                          🔨 Work
-                        </button>
-                      )}
-                      {isManager && !isBreaching && (
-                        <button
-                          onClick={() => {
-                            if (isCoop) {
-                              sendAction('removeAbno', { abnoId: abno.abnoId });
-                            } else {
-                              const newAbnos = facility.deployedAbnos.filter((a: any) => a.abnoId !== abno.abnoId);
-                              useGameStore.setState((s) => ({
-                                facility: {
-                                  ...s.facility,
-                                  deployedAbnos: newAbnos,
-                                },
-                              }));
-                              addFacilityLog(`${getDisplayName(user)} removed ${abno.abnoName}`, 'info');
-                            }
-                          }}
-                          className="text-xs px-2 py-1 border border-gray-600 text-gray-400 rounded hover:border-red-400 hover:text-red-400 transition"
-                        >
-                          Remove
-                        </button>
+            <button
+              onClick={() => {
+                if (confirm('Leave the room?')) {
+                  resetExploration();
+                }
+              }}
+              className="px-4 py-2 border border-gray-600 text-gray-400 rounded hover:border-red-400 hover:text-red-400 transition"
+            >
+              🚪 Leave Room
+            </button>
+          )}
+          <button
+            onClick={() => {
+              if (confirm('Exit to lobby?')) resetExploration();
+            }}
+            className="px-4 py-2 border border-gray-600 text-gray-400 rounded hover:border-cyan-400 hover:text-cyan-400 transition"
+          >
+            ← Back to Lobby
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── RENDER: COMBAT / EXPLORING ──────────────────────────────────
+  if (phase === 'exploring' || phase === 'waveClear' || phase === 'victory' || phase === 'defeat') {
+    const isFinished = phase === 'victory' || phase === 'defeat';
+    return (
+      <div className="space-y-4 max-w-5xl mx-auto">
+        <div className="border border-cyan-500/30 bg-gray-900/80 p-4 rounded-lg flex justify-between items-center">
+          <div>
+            <p className="font-bold text-white">{selectedPlace?.name} <span className="text-xs text-cyan-400">({selectedDifficulty})</span></p>
+            <p className="text-xs text-gray-400">
+              Wave {currentWaveIndex + 1} of {selectedPlace?.waves.length} · 
+              {enemies.filter(e => e.currentHp > 0).length} enemies remaining
+            </p>
+            {gameMode === 'coop' && (
+              <p className="text-xs text-cyan-400">🌐 Co-op · {players.map(p => p.name).join(', ')}</p>
+            )}
+          </div>
+          <div className="text-right">
+            {synergyType && (
+              <span className="text-xs px-2 py-0.5 border border-amber-400 text-amber-400">
+                {synergyType === 'amplifier' ? '⚡ Synergy: Offensive' : '💚 Synergy: Defensive'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          {identityStates.map((state, idx) => {
+            const isActive = idx === activeIdentityIndex;
+            const hpPct = state.maxHp > 0 ? (state.hp / state.maxHp) * 100 : 0;
+            return (
+              <div
+                key={state.identityId}
+                className={`border p-3 transition-all ${isActive ? 'border-cyan-400 bg-cyan-400/10' : state.hp <= 0 ? 'border-red-500/30 bg-red-500/10 opacity-50' : 'border-gray-700 bg-gray-900/80'}`}
+                style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">{identities.find(i => i.id === state.identityId)?.portrait || '👤'}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-bold text-sm truncate">{state.name}</p>
+                    <p className="text-[10px] text-gray-400">{state.playerName} · {state.classCategory}</p>
+                  </div>
+                  {state.transformationActive && <span className="text-amber-400 text-sm">⭐</span>}
+                  {isActive && <span className="text-cyan-400 text-xs">ACTIVE</span>}
+                </div>
+                <div className="mt-2 space-y-1">
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>HP</span>
+                    <span>{Math.round(state.hp)}/{state.maxHp}</span>
+                  </div>
+                  <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div className={`h-full transition-all ${hpPct > 50 ? 'bg-green-400' : hpPct > 25 ? 'bg-yellow-400' : 'bg-red-400'}`}
+                         style={{ width: `${Math.max(0, hpPct)}%` }} />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>SP</span>
+                    <span>{Math.round(state.sp)}/{state.maxSp}</span>
+                  </div>
+                  <div className="h-1 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-cyan-400" style={{ width: `${(state.sp / state.maxSp) * 100}%` }} />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>ULT</span>
+                    <span>{Math.round(state.ultimate)}%</span>
+                  </div>
+                  <div className="h-1 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-amber-400" style={{ width: `${state.ultimate}%` }} />
+                  </div>
+                  {state.shield > 0 && (
+                    <div className="text-[10px] text-cyan-400">🛡 {Math.round(state.shield)}</div>
+                  )}
+                  {state.transformationActive && (
+                    <div className="text-[10px] text-amber-400">⭐ Transformed ({state.transformationTurnsLeft}t)</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+          <h3 className="text-xs font-mono font-bold text-gray-400 mb-2">⚔️ ENEMIES</h3>
+          <div className="space-y-2">
+            {enemies.map((enemy, idx) => {
+              const isSelected = idx === selectedEnemyIndex && enemy.currentHp > 0;
+              const hpPct = enemy.maxHp > 0 ? (enemy.currentHp / enemy.maxHp) * 100 : 0;
+              return (
+                <div
+                  key={idx}
+                  onClick={() => enemy.currentHp > 0 && setSelectedEnemyIndex(idx)}
+                  className={`flex items-center justify-between p-2 border transition-all cursor-pointer ${isSelected ? 'border-cyan-400 bg-cyan-400/10' : enemy.currentHp > 0 ? 'border-gray-700 bg-gray-900/50 hover:border-cyan-400/30' : 'border-gray-800 opacity-40'}`}
+                  style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px))' }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{enemy.portrait || '👾'}</span>
+                    <div>
+                      <p className="font-bold text-white text-sm flex items-center gap-2">
+                        {enemy.name}
+                        {enemy.isBoss && <span className="text-[10px] text-amber-400 font-bold">⭐BOSS</span>}
+                      </p>
+                      <p className="text-[10px] text-gray-400">
+                        {DAMAGE_TYPE_INFO[enemy.damageType]?.icon || ''} {enemy.damageType} · 
+                        {INFUSION_INFO[enemy.infusion]?.icon || ''} {enemy.infusion}
+                        · Resists: {enemy.resistDamageType} / {enemy.resistInfusion}
+                      </p>
+                      {enemy.corrosionTurns > 0 && (
+                        <span className="text-[10px] text-red-400">🛡️ Corroded ({enemy.corrosionTurns}t)</span>
                       )}
                     </div>
                   </div>
+                  <div className="text-right">
+                    <p className="text-xs font-mono font-bold text-red-400">{Math.round(hpPct)}%</p>
+                    <div className="h-1.5 w-20 bg-gray-700 rounded-full overflow-hidden">
+                      <div className={`h-full transition-all ${hpPct > 50 ? 'bg-red-400' : hpPct > 25 ? 'bg-orange-400' : 'bg-red-600'}`}
+                           style={{ width: `${Math.max(0, hpPct)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {!isFinished && turn === 'player' && (
+          <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+            <p className="text-xs font-mono font-bold text-gray-400 mb-2">SELECT SKILL</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+              {activeSkills.map((skill, idx) => {
+                const isEgo = skill.type === 'ego';
+                const canUse = !isEgo || (activeIdentity && activeIdentity.ultimate >= 100);
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => setSelectedSkillIndex(idx)}
+                    disabled={!canUse}
+                    className={`relative p-2 border transition-all ${selectedSkillIndex === idx ? 'border-cyan-400 bg-cyan-400/20' : 'border-gray-700 bg-gray-900/50 hover:border-cyan-400/30'} ${!canUse ? 'opacity-40 cursor-not-allowed' : ''}`}
+                    style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px))' }}
+                  >
+                    <span className={`text-[10px] px-1.5 py-0.5 font-bold ${isEgo ? 'bg-amber-400/20 text-amber-400' : 'bg-gray-700 text-gray-400'}`}>
+                      {isEgo ? 'EGO' : 'NORM'}
+                    </span>
+                    <p className="text-white text-sm font-bold truncate">{skill.name}</p>
+                    <div className="flex gap-1 text-[10px] text-gray-400">
+                      <span>P:{skill.power}</span>
+                      <span>C:{skill.coins}</span>
+                      {skill.damageType && <span>{DAMAGE_TYPE_INFO[skill.damageType]?.icon}</span>}
+                    </div>
+                  </button>
                 );
               })}
             </div>
-          )}
-        </div>
-
-        {/* Facility Log */}
-        <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
-          <h3 className="text-sm font-bold text-white mb-2">📜 Facility Log</h3>
-          <div className="max-h-40 overflow-y-auto space-y-1">
-            {(facility.log || []).map((entry: any, i: number) => {
-              const time = new Date(entry.timestamp).toLocaleTimeString();
-              const color = entry.type === 'success' ? 'text-green-400' : entry.type === 'danger' ? 'text-red-400' : entry.type === 'warning' ? 'text-amber-400' : 'text-gray-400';
-              return (
-                <div key={i} className={`text-xs ${color}`}>
-                  <span className="text-gray-600">[{time}]</span> {entry.player}: {entry.message}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ─── Render: Deploy ─────────────────────────────────────────────────
-  const renderDeploy = () => {
-    const deployedToday = facility.deployedToday.length;
-    const canDeploy = deployedToday < maxDeploy;
-    const availableAbnos = getAvailableAbnos();
-
-    // Use the shared getDeployCost from the store
-    const getCost = (risk: string) => getDeployCost(facility.currentDay, risk);
-
-    return (
-      <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-cyan-400">📦 Deploy Abnormality</h3>
-          <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
-        </div>
-        <p className="text-sm text-gray-400 mb-2">Deployments today: {deployedToday}/{maxDeploy}</p>
-        {!canDeploy ? (
-          <p className="text-amber-400">Maximum deployments for today reached.</p>
-        ) : availableAbnos.length === 0 ? (
-          <p className="text-gray-400">No abnormalities available to deploy.</p>
-        ) : (
-          <div className="space-y-2 max-h-96 overflow-y-auto">
-            {availableAbnos.map(abno => {
-              const alreadyDeployed = facility.deployedAbnos.some((a: any) => a.abnoId === abno.id);
-              const cost = getCost(abno.risk);
-              const canAfford = facility.energy >= cost;
-              const isFree = cost === 0;
-
-              return (
-                <div key={abno.id} className="flex items-center justify-between border border-gray-700 bg-gray-800/50 p-2 rounded">
-                  <div>
-                    <span className="text-lg">{getRiskEmoji(abno.risk)}</span>
-                    <span className="text-white ml-2">{abno.name}</span>
-                    <span className="text-xs text-gray-400 ml-2">{abno.risk}</span>
-                    <span className="text-xs text-amber-400 ml-2">
-                      Cost: {isFree ? 'Free' : `${cost}⚡`}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      if (alreadyDeployed) return;
-                      if (!canAfford) {
-                        alert(`❌ Not enough energy (need ${cost})`);
-                        return;
-                      }
-                      if (isCoop) {
-                        // Only send to server; no local mutation
-                        sendAction('deployAbno', { abnoId: abno.id });
-                      } else {
-                        const result = deployAbnormality(abno.id, user?.id || 'guest');
-                        if (result.success) {
-                          alert(`✅ ${result.abnormality} deployed!`);
-                          addFacilityLog(`${getDisplayName(user)} deployed ${abno.name}`, 'success');
-                          setView('dashboard');
-                        } else {
-                          alert(`❌ ${result.reason}`);
-                        }
-                      }
-                    }}
-                    disabled={alreadyDeployed || !canAfford}
-                    className={`px-3 py-1 rounded text-sm ${
-                      alreadyDeployed ? 'bg-gray-700 text-gray-500 cursor-not-allowed' :
-                      isFree ? 'bg-green-500/20 border border-green-400 text-green-400 hover:bg-green-400 hover:text-gray-900 transition' :
-                      'bg-cyan-500/20 border border-cyan-400 text-cyan-400 hover:bg-cyan-400 hover:text-gray-900 transition'
-                    }`}
-                  >
-                    {alreadyDeployed ? 'Deployed' : 'Deploy'}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ─── Render: Work (Lobotomy Corp style) ──────────────────────────
-  const renderWork = () => {
-    if (!selectedIdentityId) {
-      return (
-        <div className="border border-gray-700 rounded p-4">
-          <p className="text-amber-400">Please select an identity on the dashboard first.</p>
-          <button onClick={() => setView('dashboard')} className="mt-2 text-sm text-cyan-400 hover:text-white">← Back</button>
-        </div>
-      );
-    }
-    const agentStats = getAgentStats();
-    if (!agentStats) {
-      return (
-        <div className="border border-gray-700 rounded p-4">
-          <p className="text-red-400">Agent stats not available.</p>
-          <button onClick={() => setView('dashboard')} className="mt-2 text-sm text-cyan-400 hover:text-white">← Back</button>
-        </div>
-      );
-    }
-
-    const selectedAbno = selectedAbnoId
-      ? facility.deployedAbnos.find((a: any) => a.abnoId === selectedAbnoId)
-      : null;
-
-    const availableAbnos = facility.deployedAbnos.filter((a: any) => a.qliphothCounter > 0);
-
-    if (availableAbnos.length === 0) {
-      return (
-        <div className="border border-gray-700 rounded p-4">
-          <p className="text-gray-400">No abnormalities available to work on.</p>
-          <button onClick={() => setView('dashboard')} className="mt-2 text-sm text-cyan-400 hover:text-white">← Back</button>
-        </div>
-      );
-    }
-
-    if (!selectedAbno) {
-      return (
-        <div className="border border-gray-700 rounded p-4">
-          <h3 className="text-lg font-bold text-green-400 mb-4">🔨 Select an Abnormality</h3>
-          <div className="space-y-2">
-            {availableAbnos.map((abno: any) => (
-              <button
-                key={abno.abnoId}
-                onClick={() => setSelectedAbnoId(abno.abnoId)}
-                className="w-full text-left border border-gray-700 bg-gray-800/50 p-2 rounded hover:border-cyan-400 transition"
-              >
-                <span className="text-lg">{getRiskEmoji(abno.risk)}</span>
-                <span className="text-white ml-2">{abno.abnoName}</span>
-                <span className="text-xs text-gray-400 ml-2">Qliphoth: {abno.qliphothCounter}/{abno.maxCounter}</span>
-              </button>
-            ))}
-          </div>
-          <button onClick={() => setView('dashboard')} className="mt-4 text-sm text-gray-400 hover:text-white">← Back</button>
-        </div>
-      );
-    }
-
-    const abnoData = getAbnormalityById(selectedAbno.abnoId);
-    const baseChances = abnoData?.workChances || { instinct: 0.5, insight: 0.5, attachment: 0.5, repression: 0.5 };
-    const modifiedChances = {
-      instinct: Math.min(1, baseChances.instinct * agentStats.workSuccess),
-      insight: Math.min(1, baseChances.insight * agentStats.workSuccess),
-      attachment: Math.min(1, baseChances.attachment * agentStats.workSuccess),
-      repression: Math.min(1, baseChances.repression * agentStats.workSuccess),
-    };
-
-    const identity = identities.find(i => i.id === selectedIdentityId);
-    const identityPortrait = identity?.portrait || '👤';
-
-    return (
-      <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-green-400">
-            🔨 Work on {getRiskEmoji(selectedAbno.risk)} {selectedAbno.abnoName}
-          </h3>
-          <button onClick={() => { setSelectedAbnoId(null); }} className="text-sm text-gray-400 hover:text-white">← Back</button>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-4 p-3 bg-gray-700/20 rounded">
-          <div className="text-center">
-            <p className="text-xs text-gray-400">Abnormality</p>
-            <p className="text-xl font-bold text-white">{selectedAbno.abnoName}</p>
-            <p className="text-sm text-gray-400">Risk: {selectedAbno.risk}</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xs text-gray-400">Agent</p>
-            <p className="text-xl font-bold text-cyan-400">{identity?.name || 'Agent'}</p>
-            <p className="text-sm text-gray-400">Work Bonus: +{Math.round((agentStats.workSuccess - 1) * 100)}%</p>
-          </div>
-        </div>
-
-        <div className="mb-4 flex items-center justify-between p-2 bg-gray-800/30 rounded">
-          <span className="text-sm text-gray-400">Qliphoth Counter</span>
-          <div className="flex items-center gap-2">
-            <div className="h-2 w-32 bg-gray-700 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-amber-400 transition-all duration-300"
-                style={{ width: `${(selectedAbno.qliphothCounter / selectedAbno.maxCounter) * 100}%` }}
-              />
-            </div>
-            <span className="text-white font-mono">{selectedAbno.qliphothCounter}/{selectedAbno.maxCounter}</span>
-          </div>
-        </div>
-
-        {workInProgress && !isCoop && (
-          <div className="mb-4 p-4 border-2 border-cyan-500/50 bg-cyan-500/10 rounded-lg shadow-lg animate-pulse">
-            <div className="flex items-center gap-4 mb-2">
-              <div className="text-4xl">{getRiskEmoji(selectedAbno.risk)}</div>
-              <div className="flex-1">
-                <div className="flex justify-between text-sm text-cyan-400 font-bold">
-                  <span>WORKING ON {selectedAbno.abnoName.toUpperCase()}...</span>
-                  <span>{Math.round(workProgress)}%</span>
-                </div>
-                <div className="w-full h-4 bg-gray-700 rounded-full overflow-hidden border border-cyan-500/30">
-                  <div
-                    className="h-full bg-gradient-to-r from-cyan-400 via-blue-400 to-green-400 transition-all duration-100 rounded-full"
-                    style={{ width: `${workProgress}%` }}
-                  />
-                </div>
-              </div>
-              <div className="text-3xl">{identityPortrait}</div>
-            </div>
-            <div className="text-center text-xs text-cyan-300 font-mono">
-              ⏳ {pendingWorkType?.toUpperCase()} in progress... Agent is working.
-            </div>
-          </div>
-        )}
-        {workInProgress && isCoop && (
-          <div className="mb-4 p-4 border-2 border-cyan-500/50 bg-cyan-500/10 rounded-lg text-center text-cyan-400 animate-pulse">
-            ⏳ Sending work request to server...
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-3">
-          {(['instinct', 'insight', 'attachment', 'repression'] as WorkType[]).map(type => {
-            const chance = modifiedChances[type];
-            const isDisabled = workInProgress;
-            return (
-              <button
-                key={type}
-                onClick={() => executeWork(type)}
-                disabled={isDisabled}
-                className={`p-3 border rounded transition capitalize text-sm ${
-                  isDisabled
-                    ? 'border-gray-600 bg-gray-700/50 text-gray-400 cursor-not-allowed'
-                    : 'border-gray-700 bg-gray-800/30 hover:border-cyan-400 hover:bg-cyan-400/10'
-                }`}
-              >
-                <div className="font-bold">{type}</div>
-                <div className="text-xs text-gray-400">{Math.round(chance * 100)}% success</div>
-                {isDisabled && workInProgress && !isCoop && (
-                  <div className="text-[10px] text-cyan-400 animate-pulse">⏳ Working...</div>
-                )}
-                {isDisabled && workInProgress && isCoop && (
-                  <div className="text-[10px] text-cyan-400 animate-pulse">⏳ Sending...</div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {workResult && (
-          <div className={`mt-4 p-4 border-2 rounded-lg shadow-lg transition-all duration-500 ${
-            workResult.isSuccess
-              ? 'border-green-500/50 bg-green-500/10 scale-100'
-              : 'border-red-500/50 bg-red-500/10 scale-100'
-          }`}>
-            <div className="flex items-center gap-4">
-              <span className="text-4xl">{workResult.isSuccess ? '✅' : '❌'}</span>
-              <div className="flex-1">
-                <p className={`text-xl font-bold ${workResult.isSuccess ? 'text-green-400' : 'text-red-400'}`}>
-                  {workResult.isSuccess ? 'GOOD' : 'BAD'} WORK RESULT
-                </p>
-                <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
-                  <div>
-                    <span className="text-gray-400">Energy:</span>
-                    <span className="text-cyan-400 ml-1">+{workResult.energyGain}</span>
-                  </div>
-                  {workResult.peBoxes > 0 && (
-                    <div>
-                      <span className="text-gray-400">PE Boxes:</span>
-                      <span className="text-amber-400 ml-1">+{workResult.peBoxes}</span>
-                    </div>
-                  )}
-                </div>
-                {workResult.breached && (
-                  <p className="text-red-400 text-sm animate-pulse mt-1">⚠️ BREACH TRIGGERED!</p>
-                )}
-                {workResult.boostDropped && (
-                  <p className="text-green-400 text-sm mt-1">📈 Temperance Boost dropped!</p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <button onClick={() => setView('dashboard')} className="mt-4 text-sm text-gray-400 hover:text-white">← Back</button>
-      </div>
-    );
-  };
-
-  // ─── Render: Research ─────────────────────────────────────────────
-  const renderResearch = () => {
-    const deptKey = facility.departmentKey;
-    const dept = DEPARTMENTS[deptKey as DepartmentId];
-    const researches = dept?.research || [];
-
-    return (
-      <div className="border border-gray-700 rounded p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-purple-400">🔬 Research</h3>
-          <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
-        </div>
-        <div className="space-y-2">
-          {researches.map(r => {
-            const unlocked = facility.unlockedResearch.includes(r.id);
-            return (
-              <div key={r.id} className="border border-gray-700 bg-gray-800/30 p-3 rounded flex items-center justify-between">
-                <div>
-                  <p className="text-white font-bold">{r.name}</p>
-                  <p className="text-xs text-gray-400">{r.description}</p>
-                  <p className="text-xs text-amber-400">Cost: {r.cost.lunacy}🌟 / {r.cost.energy}⚡</p>
-                </div>
-                <button
-                  onClick={() => {
-                    if (unlocked) return;
-                    if (isCoop) {
-                      sendAction('unlockResearch', { researchId: r.id });
-                    } else {
-                      const result = unlockResearch(r.id);
-                      if (result.success) {
-                        alert(`✅ ${r.name} unlocked!`);
-                        addFacilityLog(`${getDisplayName(user)} researched ${r.name}`, 'success');
-                      } else alert(`❌ ${result.reason}`);
-                    }
-                  }}
-                  disabled={unlocked}
-                  className={`px-3 py-1 rounded text-sm ${unlocked ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-purple-500/20 border border-purple-400 text-purple-400 hover:bg-purple-400 hover:text-gray-900 transition'}`}
-                >
-                  {unlocked ? 'Unlocked' : 'Unlock'}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  // ─── Render: Missions ─────────────────────────────────────────────
-  const renderMissions = () => {
-    const missions = [
-      { id: 'm1', name: 'First Work', description: 'Complete 1 successful work', progress: facility.missionProgress?.worksCompleted || 0, required: 1 },
-      { id: 'm2', name: 'Energy Collector', description: 'Collect 50 energy', progress: facility.totalEnergy || 0, required: 50 },
-      { id: 'm3', name: 'Deployer', description: 'Deploy 3 abnormalities', progress: facility.missionProgress?.totalDeployments || 0, required: 3 },
-    ];
-    const completed = facility.completedMissions || [];
-
-    return (
-      <div className="border border-gray-700 rounded p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-amber-400">📜 Missions</h3>
-          <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
-        </div>
-        <div className="space-y-2">
-          {missions.map(m => {
-            const done = completed.includes(m.id);
-            const pct = Math.min(100, (m.progress / m.required) * 100);
-            return (
-              <div key={m.id} className={`border p-3 rounded ${done ? 'border-green-500/30 bg-green-500/10' : 'border-gray-700 bg-gray-800/30'}`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-white font-bold">{done ? '✅' : '📋'} {m.name}</p>
-                    <p className="text-xs text-gray-400">{m.description}</p>
-                  </div>
-                  <span className="text-xs text-amber-400">{Math.round(pct)}%</span>
-                </div>
-                <div className="h-1.5 bg-gray-700 rounded mt-1 overflow-hidden">
-                  <div className="h-full bg-amber-400" style={{ width: `${pct}%` }} />
-                </div>
-                <p className="text-xs text-gray-500 mt-0.5">{m.progress}/{m.required}</p>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  // ─── Render: Bullets ────────────────────────────────────────────────
-  const renderBullets = () => {
-    if (!isManager) return null;
-
-    const bulletTypes = [
-      { key: 'red', label: 'Red', emoji: '🔴' },
-      { key: 'white', label: 'White', emoji: '⚪' },
-      { key: 'black', label: 'Black', emoji: '⚫' },
-      { key: 'pale', label: 'Pale', emoji: '💀' },
-      { key: 'hp', label: 'HP Heal', emoji: '💚' },
-      { key: 'sp', label: 'SP Heal', emoji: '💙' },
-      { key: 'adrenaline', label: 'Adrenaline', emoji: '⚡' },
-      { key: 'execution', label: 'Execution', emoji: '🔫' },
-    ];
-
-    const capacity = Math.floor(10 * (facility.bulletCapacityMultiplier || 1));
-    const costPerBatch = 10;
-
-    return (
-      <div className="border border-gray-700 rounded p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-red-400">🔫 Bullets</h3>
-          <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          {bulletTypes.map(b => {
-            const count = facility.bullets?.[b.key] || 0;
-            const atCapacity = count >= capacity;
-            const canAfford = lunacy >= costPerBatch;
-
-            return (
-              <div key={b.key} className="border border-gray-700 bg-gray-800/30 p-2 rounded flex items-center justify-between">
-                <span className="text-white">{b.emoji} {b.label}</span>
-                <span className="text-cyan-400 font-mono">{count}/{capacity}</span>
-                <button
-                  onClick={() => {
-                    if (atCapacity) {
-                      alert(`⚠️ Capacity reached for ${b.label} bullets (${capacity})`);
-                      return;
-                    }
-                    if (!canAfford) {
-                      alert(`❌ Not enough Lunacy (need ${costPerBatch}, have ${lunacy})`);
-                      return;
-                    }
-                    if (isCoop) {
-                      sendAction('addBullets', { type: b.key, amount: 10 });
-                    } else {
-                      // Deduct cost and add bullets locally
-                      useGameStore.setState(state => ({
-                        lunacy: state.lunacy - costPerBatch,
-                        facility: {
-                          ...state.facility,
-                          bullets: {
-                            ...state.facility.bullets,
-                            [b.key]: (state.facility.bullets?.[b.key] || 0) + 10,
-                          },
-                        },
-                      }));
-                      addFacilityLog(`Purchased ${10} ${b.label} bullets`, 'success');
-                    }
-                  }}
-                  disabled={atCapacity || !canAfford}
-                  className={`text-xs px-2 py-0.5 rounded transition ${
-                    atCapacity || !canAfford
-                      ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                      : 'border border-gray-600 text-gray-400 hover:border-cyan-400 hover:text-cyan-400'
-                  }`}
-                >
-                  +10
-                </button>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-4 flex justify-between text-xs text-gray-400">
-          <span>Capacity: {capacity}</span>
-          <span>Cost: {costPerBatch}🌟 per +10</span>
-          <span>Lunacy: {lunacy}</span>
-        </div>
-      </div>
-    );
-  };
-
-  // ─── Render: Memory ──────────────────────────────────────────────
-  const renderMemory = () => {
-    if (!isManager || !facility.memoryRepositoryAvailable) return null;
-    return (
-      <div className="border border-gray-700 rounded p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-indigo-400">🔄 Memory Repository</h3>
-          <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
-        </div>
-        <p className="text-sm text-gray-400 mb-2">Return to a previous day (costs 1500 Lunacy)</p>
-        <div className="flex gap-2">
-          <input
-            type="number"
-            value={targetDay}
-            onChange={(e) => setTargetDay(Math.max(1, parseInt(e.target.value) || 1))}
-            min={1}
-            max={facility.currentDay}
-            className="bg-gray-800 border border-gray-700 rounded px-3 py-1 text-white w-24"
-          />
-          <button
-            onClick={() => {
-              if (lunacy < 1500) {
-                alert(`❌ Not enough Lunacy (need 1500, have ${lunacy})`);
-                return;
-              }
-              if (isCoop) {
-                sendAction('memoryRepository', { targetDay });
-              } else {
-                const result = useMemoryRepository(targetDay);
-                if (result.success) {
-                  alert(`🔄 Reset to Day ${targetDay}`);
-                  addFacilityLog(`${getDisplayName(user)} used Memory Repository to Day ${targetDay}`, 'warning');
-                  setView('dashboard');
-                } else {
-                  alert(`❌ ${result.reason}`);
-                }
-              }
-            }}
-            className="px-4 py-1 bg-indigo-500/20 border border-indigo-400 text-indigo-400 rounded hover:bg-indigo-400 hover:text-gray-900 transition"
-          >
-            Reset to Day {targetDay} (1500🌟)
-          </button>
-        </div>
-        <p className="text-xs text-gray-500 mt-2">Your Lunacy: {lunacy}</p>
-      </div>
-    );
-  };
-
-  // ─── Render: Combat ────────────────────────────────────────────────
-  const renderCombat = () => {
-    if (!combatPlayer || !combatEnemy) return null;
-
-    const isInitiator = combatInitiator === user?.id;
-
-    const HpBarCombat = ({ value, max, color = 'green', label }: any) => {
-      const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
-      const colorClass = color === 'green' ? 'bg-green-500' : color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-blue-500';
-      return (
-        <div className="w-full">
-          {label && <div className="flex justify-between text-xs text-gray-400"><span>{label}</span><span>{Math.round(pct)}%</span></div>}
-          <div className="h-2 bg-gray-700 rounded overflow-hidden">
-            <div className={`h-full transition-all duration-300 ${colorClass}`} style={{ width: `${pct}%` }} />
-          </div>
-        </div>
-      );
-    };
-
-    return (
-      <div className="border border-cyan-500/30 bg-gray-900/80 p-4 rounded-lg space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold text-red-400">⚔️ BREACH SUPPRESSION</h3>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400">Initiator: {combatInitiator ? players.find(p => p.id === combatInitiator)?.name || combatInitiator : 'Unknown'}</span>
             <button
-              onClick={() => {
-                if (isCombatFinished) {
-                  setView('dashboard');
-                } else if (isInitiator && confirm('Retreat from combat?')) {
-                  setIsCombatFinished(true);
-                  setView('dashboard');
-                  addFacilityLog(`${getDisplayName(user)} retreated from combat`, 'danger');
-                  if (isCoop) sendAction('combatRetreat', {});
-                } else if (!isInitiator) {
-                  alert('Only the initiator can retreat.');
-                }
-              }}
-              className="text-sm text-gray-400 hover:text-white"
+              onClick={handlePlayerAction}
+              disabled={!activeIdentity || activeIdentity.hp <= 0}
+              className="w-full py-3 bg-cyan-400/20 border border-cyan-400 text-cyan-400 font-mono font-bold hover:bg-cyan-400 hover:text-gray-900 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
             >
-              {isCombatFinished ? '← Back' : (isInitiator ? '🏳️ Retreat' : '⏳ Spectating...')}
+              ⚔️ EXECUTE CLASH
             </button>
           </div>
-        </div>
+        )}
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="border border-gray-700 p-3 rounded">
-            <p className="text-sm font-bold text-green-400">{combatPlayer.name} (You)</p>
-            <HpBarCombat value={playerHp} max={playerMaxHp} color="green" label="HP" />
-            <div className="mt-1 flex gap-2 text-xs text-gray-400">
-              <span>ATK: {combatPlayer.atk}</span>
-              <span>DEF: {combatPlayer.def}</span>
-            </div>
+        {turn === 'resolve' && !isFinished && (
+          <button
+            onClick={resolvePhase}
+            className="w-full py-3 bg-amber-400/20 border border-amber-400 text-amber-400 font-mono font-bold hover:bg-amber-400 hover:text-gray-900 transition-all"
+            style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
+          >
+            ⏳ RESOLVE
+          </button>
+        )}
+
+        {turn === 'enemy' && !isFinished && (
+          <div className="border border-gray-700 bg-gray-900/80 p-4 text-center text-gray-400">
+            <p>⚔️ Enemy turn in progress...</p>
           </div>
-          <div className="border border-gray-700 p-3 rounded">
-            <p className="text-sm font-bold text-red-400">{combatEnemy.name}</p>
-            <HpBarCombat value={enemyHp} max={enemyMaxHp} color="red" label="HP" />
-            <div className="mt-1 flex gap-2 text-xs text-gray-400">
-              <span>ATK: {combatEnemy.atk}</span>
-              <span>DEF: {combatEnemy.def}</span>
-            </div>
-          </div>
-        </div>
+        )}
 
         {clashData && (
-          <div className={`border p-3 rounded ${clashData.won ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
+          <div className={`border p-4 ${clashData.won ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}
+               style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}>
             <p className="text-center font-bold">{clashData.won ? '✅ CLASH WON!' : '❌ CLASH LOST!'}</p>
             <p className="text-center text-sm text-gray-400">
               {clashData.actorName} dealt {clashData.dmg} damage.
@@ -1959,88 +1662,43 @@ export default function DepartmentView() {
           </div>
         )}
 
-        {!isCombatFinished && combatTurn === 'player' && isInitiator && (
-          <div>
-            <p className="text-xs font-mono font-bold text-gray-400 mb-2">SELECT SKILL</p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-              {combatPlayer.skills.map((skill: any, idx: number) => (
-                <button
-                  key={idx}
-                  onClick={() => setSelectedSkillIndex(idx)}
-                  className={`p-2 border transition-all ${selectedSkillIndex === idx ? 'border-cyan-400 bg-cyan-400/20' : 'border-gray-700 bg-gray-900/50 hover:border-cyan-400/30'}`}
-                >
-                  <p className="text-white text-sm font-bold truncate">{skill.name}</p>
-                  <div className="flex gap-1 text-[10px] text-gray-400">
-                    <span>P:{skill.power}</span>
-                    <span>C:{skill.coins}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
+        {isFinished && (
+          <div className={`border p-6 text-center ${phase === 'victory' ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}
+               style={{ clipPath: 'polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px))' }}>
+            <span className="text-6xl">{phase === 'victory' ? '🏆' : '💔'}</span>
+            <h2 className="text-2xl font-bold mt-2">{phase === 'victory' ? 'VICTORY!' : 'DEFEAT'}</h2>
+            {finalScore !== null && (
+              <p className="text-xl font-mono text-cyan-400 mt-2">Score: {finalScore}</p>
+            )}
             <button
-              onClick={handleCombatAction}
-              className="w-full py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 font-mono font-bold hover:bg-cyan-400 hover:text-gray-900 transition rounded"
+              onClick={resetExploration}
+              className="mt-4 px-6 py-3 bg-cyan-400/20 border border-cyan-400 text-cyan-400 font-mono font-bold hover:bg-cyan-400 hover:text-gray-900 transition-all"
+              style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
             >
-              ⚔️ CLASH
+              🔄 BACK TO MAP
             </button>
           </div>
         )}
 
-        {!isCombatFinished && combatTurn === 'resolve' && isInitiator && (
+        {!isFinished && (
           <button
-            onClick={resolveCombat}
-            className="w-full py-2 bg-amber-400/20 border border-amber-400 text-amber-400 font-mono font-bold hover:bg-amber-400 hover:text-gray-900 transition rounded"
+            onClick={retreat}
+            className="w-full py-2 border border-gray-700 text-gray-400 font-mono text-sm hover:border-red-400 hover:text-red-400 transition-all"
+            style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))' }}
           >
-            ⏳ RESOLVE
+            🏳️ RETREAT
           </button>
         )}
 
-        {!isInitiator && !isCombatFinished && (
-          <div className="text-center text-gray-400 py-4">⏳ Waiting for {combatInitiator ? players.find(p => p.id === combatInitiator)?.name : 'the initiator'} to act...</div>
-        )}
-
-        {isCombatFinished && (
-          <button
-            onClick={() => setView('dashboard')}
-            className="w-full py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 font-mono font-bold hover:bg-cyan-400 hover:text-gray-900 transition rounded"
-          >
-            ↩️ BACK TO FACILITY
-          </button>
-        )}
-
-        <div className="border border-gray-700 bg-gray-900/50 p-2 rounded max-h-32 overflow-y-auto">
-          <p className="text-xs font-mono font-bold text-gray-400 mb-1">⚔️ COMBAT LOG</p>
-          {combatLog.map((line, i) => (
-            <p key={i} className="text-xs text-gray-400">{line}</p>
-          ))}
+        <div className="border border-gray-700 bg-gray-900/80 p-4 rounded-lg">
+          <h3 className="text-xs font-mono font-bold text-gray-400 mb-2">📜 EXPLORATION LOG</h3>
+          <div className="max-h-40 overflow-y-auto font-mono text-xs space-y-0.5 bg-gray-800/30 p-2 rounded">
+            {log.map((l, i) => <p key={i} className="text-gray-400">{l}</p>)}
+          </div>
         </div>
       </div>
     );
-  };
+  }
 
-  // ─── Main Render ────────────────────────────────────────────────────
-  return (
-    <div className="p-4 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-cyan-400">
-          {deptConfig?.icon} {deptConfig?.name || 'Facility'}
-          {isCoop && <span className="text-sm text-cyan-300 ml-2">🌐 Co‑op</span>}
-        </h1>
-        <span className="text-sm text-gray-400">Manager: {facility.managerId === user?.id ? 'You' : facility.managerId}</span>
-      </div>
-
-      {view === 'combat' ? renderCombat() : (
-        <>
-          {view === 'dashboard' && renderDashboard()}
-          {view === 'deploy' && renderDeploy()}
-          {view === 'work' && renderWork()}
-          {view === 'research' && renderResearch()}
-          {view === 'missions' && renderMissions()}
-          {view === 'bullets' && renderBullets()}
-          {view === 'memory' && renderMemory()}
-        </>
-      )}
-      {isCoop && <GlobalChat />}
-    </div>
-  );
+  return null;
 }
