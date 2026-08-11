@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { ZstdCodec } from 'zstd-codec';
 import useGameStore, { TICKET_COSTS } from '../store/gameStore';
-import { data as movesetsData, ranks as rankEmojis } from '../data/movesets';
+import { data as movesetsData, ranks as rankEmojis } from '../data/movesets/index';
 
 const RANK_ORDER = ['ALEPH', 'WAW', 'HE', 'TETH', 'ZAYIN', 'WALKIRKSNACHT'];
 
