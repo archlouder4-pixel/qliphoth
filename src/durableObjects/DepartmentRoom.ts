@@ -93,12 +93,15 @@ export class DepartmentRoom extends DurableObject {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
-    const session = this.ctx.getWebSocketData(ws) as { playerId?: string };
 
     if (data.type === 'join') {
       await this.handleJoin(ws, data);
       return;
     }
+
+    // ✅ FIX: attachments live on the WebSocket itself (survives hibernation),
+    // not on ctx. ctx.getWebSocketData() is not a real Durable Object API.
+    const session = ws.deserializeAttachment() as { playerId?: string } | null;
 
     if (!session?.playerId) {
       ws.send(JSON.stringify({ type: 'error', message: 'Not joined. Send join first.' }));
@@ -147,12 +150,20 @@ export class DepartmentRoom extends DurableObject {
       case 'memoryRepository':
         await this.handleMemoryRepository(ws, data.payload.targetDay, playerId);
         break;
+      case 'disbandDepartmentRoom':
+        await this.handleDisband(ws, playerId);
+        break;
+      case 'leaveDepartmentRoom':
+        // Client-side leave already handled via webSocketClose when the socket closes;
+        // nothing additional needed here, but acknowledge so the client isn't left hanging.
+        ws.send(JSON.stringify({ type: 'leaveAck' }));
+        break;
       default:
         ws.send(JSON.stringify({ type: 'error', message: `Unknown action: ${data.type}` }));
     }
   }
 
-  // ─── Join handler (FIXED) ──────────────────────────────────────────
+  // ─── Join handler ──────────────────────────────────────────────────
   private async handleJoin(ws: WebSocket, data: any) {
     const playerId = data.playerId || data.userId || crypto.randomUUID();
     const playerName = data.playerName || 'Guest';
@@ -172,13 +183,16 @@ export class DepartmentRoom extends DurableObject {
       this.state.facility.members.push(playerId);
     }
 
-    // ✅ FIX 1: Ensure the facility is active when someone joins
     this.state.facility.isActive = true;
 
-    this.ctx.setWebSocketData(ws, { playerId });
+    // ✅ FIX: use ws.serializeAttachment, not ctx.setWebSocketData (doesn't exist).
+    // This is what was silently throwing and killing the join before any response
+    // was ever sent back to the client.
+    ws.serializeAttachment({ playerId });
+
     await this.saveState();
 
-    // ✅ FIX 2: Send the full state directly to this new client
+    // Send the full state directly to this new client
     ws.send(JSON.stringify({
       type: 'stateUpdate',
       players: this.state.players,
@@ -509,9 +523,25 @@ export class DepartmentRoom extends DurableObject {
     ws.send(JSON.stringify({ type: 'memoryResult', success: true }));
   }
 
+  // ✅ New: server-side disband handler, since the client now only sends this
+  // action when isCoop is actually true (see DepartmentView.tsx fix).
+  private async handleDisband(ws: WebSocket, playerId: string) {
+    if (this.state.facility.managerId !== playerId) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Only the manager can disband the facility' }));
+      return;
+    }
+    this.state = this.createDefaultState();
+    await this.saveState();
+    const payload = JSON.stringify({ type: 'departmentRoomDisbanded' });
+    for (const [socket] of this.ctx.getWebSockets()) {
+      socket.send(payload);
+    }
+  }
+
   // ─── WebSocket close ──────────────────────────────────────────────
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    const session = this.ctx.getWebSocketData(ws) as { playerId?: string };
+    // ✅ FIX: same attachment fix as above
+    const session = ws.deserializeAttachment() as { playerId?: string } | null;
     if (!session?.playerId) return;
     const playerId = session.playerId;
 
