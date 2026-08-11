@@ -29,6 +29,7 @@ export class GlobalChat extends DurableObject {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
+
     if (data.type === 'chat') {
       const msg: ChatMessage = {
         user: data.user || 'Anonymous',
@@ -39,8 +40,12 @@ export class GlobalChat extends DurableObject {
       if (this.messages.length > this.maxMessages) {
         this.messages = this.messages.slice(-this.maxMessages);
       }
-      // Broadcast to all connected clients
-      for (const [otherWs, _] of this.ctx.getWebSockets()) {
+
+      // ✅ FIX: ctx.getWebSockets() returns a plain WebSocket[], not [key, value]
+      // pairs. Destructuring each entry as [otherWs, _] threw a TypeError on the
+      // first iteration, which silently aborted this whole handler before any
+      // broadcast (or even an echo back to the sender) went out.
+      for (const otherWs of this.ctx.getWebSockets()) {
         otherWs.send(JSON.stringify({ type: 'chat', ...msg }));
       }
     }
