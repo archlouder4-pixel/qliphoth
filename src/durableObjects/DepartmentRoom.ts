@@ -99,8 +99,6 @@ export class DepartmentRoom extends DurableObject {
       return;
     }
 
-    // ✅ FIX: attachments live on the WebSocket itself (survives hibernation),
-    // not on ctx. ctx.getWebSocketData() is not a real Durable Object API.
     const session = ws.deserializeAttachment() as { playerId?: string } | null;
 
     if (!session?.playerId) {
@@ -154,8 +152,6 @@ export class DepartmentRoom extends DurableObject {
         await this.handleDisband(ws, playerId);
         break;
       case 'leaveDepartmentRoom':
-        // Client-side leave already handled via webSocketClose when the socket closes;
-        // nothing additional needed here, but acknowledge so the client isn't left hanging.
         ws.send(JSON.stringify({ type: 'leaveAck' }));
         break;
       default:
@@ -163,11 +159,30 @@ export class DepartmentRoom extends DurableObject {
     }
   }
 
+  // ─── Cost logic (aligned with client) ──────────────────────────────
+  private getDeployCost(day: number, risk: string): number {
+    if (risk === 'ZAYIN' || risk === 'TETH') return 0;
+    if (risk === 'HE') return 10 + Math.floor(day * 0.5);
+    if (risk === 'WAW') return 25 + Math.floor(day * 0.8);
+    if (risk === 'ALEPH') return 50 + day;
+    return 0;
+  }
+
   // ─── Join handler ──────────────────────────────────────────────────
   private async handleJoin(ws: WebSocket, data: any) {
     const playerId = data.playerId || data.userId || crypto.randomUUID();
     const playerName = data.playerName || 'Guest';
     const isHost = this.state.players.length === 0;
+
+    // Persist department key and config from client
+    if (data.departmentKey && !this.state.facility.departmentKey) {
+      this.state.facility.departmentKey = data.departmentKey;
+    }
+    if (data.departmentConfig) {
+      this.state.facility.maxDeployPerDay = data.departmentConfig.maxDeployPerDay ?? 1;
+      this.state.facility.maxEnergy = data.departmentConfig.maxEnergy ?? 100;
+    }
+
     const player: Player = {
       id: playerId,
       name: playerName,
@@ -185,14 +200,11 @@ export class DepartmentRoom extends DurableObject {
 
     this.state.facility.isActive = true;
 
-    // ✅ FIX: use ws.serializeAttachment, not ctx.setWebSocketData (doesn't exist).
-    // This is what was silently throwing and killing the join before any response
-    // was ever sent back to the client.
     ws.serializeAttachment({ playerId });
 
     await this.saveState();
 
-    // Send the full state directly to this new client
+    // Send full state directly to this new client
     ws.send(JSON.stringify({
       type: 'stateUpdate',
       players: this.state.players,
@@ -200,7 +212,7 @@ export class DepartmentRoom extends DurableObject {
       combat: this.state.combat,
     }));
 
-    // Broadcast to everyone else (the new client will get it twice – that's fine)
+    // Broadcast to all others (the new client will get it twice, harmless)
     this.broadcastState();
 
     ws.send(JSON.stringify({ type: 'joined', playerIndex: this.state.players.length - 1 }));
@@ -212,16 +224,16 @@ export class DepartmentRoom extends DurableObject {
     const facility = this.state.facility;
     const abnoData = abnormalities.find(a => a.id === abnoId);
     if (!abnoData) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Abnormality not found' }));
+      ws.send(JSON.stringify({ type: 'actionResult', success: false, message: 'Abnormality not found' }));
       return;
     }
     if (facility.deployedAbnos.some(a => a.abnoId === abnoId)) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Already deployed' }));
+      ws.send(JSON.stringify({ type: 'actionResult', success: false, message: 'Already deployed' }));
       return;
     }
-    const cost = abnoData.risk === 'ALEPH' ? 50 : abnoData.risk === 'WAW' ? 30 : abnoData.risk === 'HE' ? 15 : 5;
+    const cost = this.getDeployCost(facility.currentDay, abnoData.risk);
     if (facility.energy < cost) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Not enough energy' }));
+      ws.send(JSON.stringify({ type: 'actionResult', success: false, message: `Not enough energy (need ${cost})` }));
       return;
     }
     facility.energy -= cost;
@@ -301,6 +313,8 @@ export class DepartmentRoom extends DurableObject {
     }
     facility.energy -= required;
     facility.currentDay += 1;
+    // Grow maxEnergy by 5, cap at 300
+    facility.maxEnergy = Math.min(300, facility.maxEnergy + 5);
     facility.deployedToday = [];
     let ordeal = null;
     if (facility.currentDay % 5 === 0) {
@@ -510,7 +524,7 @@ export class DepartmentRoom extends DurableObject {
   private async handleMemoryRepository(ws: WebSocket, targetDay: number, playerId: string) {
     const facility = this.state.facility;
     if (targetDay < 1 || targetDay > facility.currentDay) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Invalid day' }));
+      ws.send(JSON.stringify({ type: 'error', message: 'Invalid target day' }));
       return;
     }
     facility.currentDay = targetDay;
@@ -523,8 +537,6 @@ export class DepartmentRoom extends DurableObject {
     ws.send(JSON.stringify({ type: 'memoryResult', success: true }));
   }
 
-  // ✅ New: server-side disband handler, since the client now only sends this
-  // action when isCoop is actually true (see DepartmentView.tsx fix).
   private async handleDisband(ws: WebSocket, playerId: string) {
     if (this.state.facility.managerId !== playerId) {
       ws.send(JSON.stringify({ type: 'error', message: 'Only the manager can disband the facility' }));
@@ -533,11 +545,6 @@ export class DepartmentRoom extends DurableObject {
     this.state = this.createDefaultState();
     await this.saveState();
     const payload = JSON.stringify({ type: 'departmentRoomDisbanded' });
-
-    // ✅ FIX: ctx.getWebSockets() returns a plain WebSocket[], not [key, value]
-    // pairs. Destructuring each entry as [socket] silently threw and aborted
-    // the broadcast, so only the manager's own disband request ever completed
-    // locally — everyone else's client never heard about it.
     for (const socket of this.ctx.getWebSockets()) {
       socket.send(payload);
     }
@@ -545,7 +552,6 @@ export class DepartmentRoom extends DurableObject {
 
   // ─── WebSocket close ──────────────────────────────────────────────
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    // ✅ FIX: same attachment fix as above
     const session = ws.deserializeAttachment() as { playerId?: string } | null;
     if (!session?.playerId) return;
     const playerId = session.playerId;
@@ -589,11 +595,6 @@ export class DepartmentRoom extends DurableObject {
     this.state.facility.log = [entry, ...this.state.facility.log].slice(0, 50);
   }
 
-  // ✅ FIX: ctx.getWebSockets() returns a plain WebSocket[], not [key, value]
-  // pairs. Destructuring each entry as [ws, _] threw a TypeError on the first
-  // iteration, which silently aborted every broadcast — this is why the manager's
-  // screen never saw the member count update when someone else joined, and why
-  // no facility state changes ever propagated to other connected players.
   private broadcastState() {
     const payload = {
       type: 'stateUpdate',
