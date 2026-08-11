@@ -5,6 +5,7 @@
 // FIX: departmentKey sync – send current facility.departmentKey on join.
 // FIX: HOTFIX – prevent server's null departmentKey from overwriting a valid local key.
 // FIX: Co‑op actions now ONLY send to server – no local mutations to avoid desync.
+// FIX: Added 'logAdded' case to handle WebSocket message and silence console warning.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -323,22 +324,26 @@ export default function DepartmentView() {
     const ws = new WebSocket(`wss://${wsUrl}/room/department/${roomId}`);
     wsRef.current = ws;
 
+    let joinSent = false;
+
     ws.onopen = () => {
       console.log('WebSocket connected to department room');
       const currentDeptKey = useGameStore.getState().facility.departmentKey;
       const deptConfig = DEPARTMENTS[currentDeptKey as DepartmentId];
-      // Send department config so server can match initial maxEnergy / maxDeployPerDay
-      ws.send(JSON.stringify({
-        type: 'join',
-        playerId: user?.id || crypto.randomUUID(),
-        playerName: getDisplayName(user),
-        identityId: selectedIdentityId,
-        departmentKey: currentDeptKey,
-        departmentConfig: {
-          maxDeployPerDay: deptConfig?.maxAbnosPerDay || 1,
-          maxEnergy: 100 + (deptConfig?.dayUnlock || 0) * 2,
-        },
-      }));
+      if (!joinSent) {
+        joinSent = true;
+        ws.send(JSON.stringify({
+          type: 'join',
+          playerId: user?.id || crypto.randomUUID(),
+          playerName: getDisplayName(user),
+          identityId: selectedIdentityId,
+          departmentKey: currentDeptKey,
+          departmentConfig: {
+            maxDeployPerDay: deptConfig?.maxAbnosPerDay || 1,
+            maxEnergy: 100 + (deptConfig?.dayUnlock || 0) * 2,
+          },
+        }));
+      }
     };
 
     ws.onmessage = (event) => {
@@ -411,7 +416,6 @@ export default function DepartmentView() {
         } else {
           alert(`❌ ${data.message}`);
         }
-        // The stateUpdate will refresh the UI; no further action needed.
         break;
       }
 
@@ -470,6 +474,12 @@ export default function DepartmentView() {
         } else {
           addFacilityLog(`${data.initiator} failed to suppress ${data.enemyName}.`, 'danger');
         }
+        break;
+
+      case 'logAdded':
+        // Facility log was updated on the server – we can ignore it,
+        // since the stateUpdate already includes the full log.
+        // This case just silences the "Unhandled WebSocket message" warning.
         break;
 
       case 'error':
@@ -1743,7 +1753,7 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Bullets (FIXED: capacity + cost) ────────────────────
+  // ─── Render: Bullets ────────────────────────────────────────────────
   const renderBullets = () => {
     if (!isManager) return null;
 
