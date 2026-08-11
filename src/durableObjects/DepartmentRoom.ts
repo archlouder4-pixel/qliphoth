@@ -58,7 +58,7 @@ export class DepartmentRoom extends DurableObject {
         bullets: { red: 0, white: 0, black: 0, pale: 0, hp: 0, sp: 0, adrenaline: 0, execution: 0 },
         bulletCapacityMultiplier: 1,
         memoryRepositoryAvailable: false,
-        lunacy: 0, // added to support research costs
+        lunacy: 0,
         log: [],
       },
       combat: null,
@@ -152,7 +152,7 @@ export class DepartmentRoom extends DurableObject {
     }
   }
 
-  // ─── Join handler ──────────────────────────────────────────────────
+  // ─── Join handler (FIXED) ──────────────────────────────────────────
   private async handleJoin(ws: WebSocket, data: any) {
     const playerId = data.playerId || data.userId || crypto.randomUUID();
     const playerName = data.playerName || 'Guest';
@@ -171,9 +171,24 @@ export class DepartmentRoom extends DurableObject {
     if (!this.state.facility.members.includes(playerId)) {
       this.state.facility.members.push(playerId);
     }
+
+    // ✅ FIX 1: Ensure the facility is active when someone joins
+    this.state.facility.isActive = true;
+
     this.ctx.setWebSocketData(ws, { playerId });
     await this.saveState();
+
+    // ✅ FIX 2: Send the full state directly to this new client
+    ws.send(JSON.stringify({
+      type: 'stateUpdate',
+      players: this.state.players,
+      facility: this.state.facility,
+      combat: this.state.combat,
+    }));
+
+    // Broadcast to everyone else (the new client will get it twice – that's fine)
     this.broadcastState();
+
     ws.send(JSON.stringify({ type: 'joined', playerIndex: this.state.players.length - 1 }));
   }
 
@@ -325,7 +340,6 @@ export class DepartmentRoom extends DurableObject {
       ws.send(JSON.stringify({ type: 'error', message: 'Already unlocked' }));
       return;
     }
-    // Check costs – use facility.lunacy and facility.energy
     if (research.cost.lunacy && facility.lunacy < research.cost.lunacy) {
       ws.send(JSON.stringify({ type: 'error', message: 'Not enough Lunacy' }));
       return;
