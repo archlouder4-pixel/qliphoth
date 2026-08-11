@@ -533,7 +533,12 @@ export class DepartmentRoom extends DurableObject {
     this.state = this.createDefaultState();
     await this.saveState();
     const payload = JSON.stringify({ type: 'departmentRoomDisbanded' });
-    for (const [socket] of this.ctx.getWebSockets()) {
+
+    // ✅ FIX: ctx.getWebSockets() returns a plain WebSocket[], not [key, value]
+    // pairs. Destructuring each entry as [socket] silently threw and aborted
+    // the broadcast, so only the manager's own disband request ever completed
+    // locally — everyone else's client never heard about it.
+    for (const socket of this.ctx.getWebSockets()) {
       socket.send(payload);
     }
   }
@@ -584,6 +589,11 @@ export class DepartmentRoom extends DurableObject {
     this.state.facility.log = [entry, ...this.state.facility.log].slice(0, 50);
   }
 
+  // ✅ FIX: ctx.getWebSockets() returns a plain WebSocket[], not [key, value]
+  // pairs. Destructuring each entry as [ws, _] threw a TypeError on the first
+  // iteration, which silently aborted every broadcast — this is why the manager's
+  // screen never saw the member count update when someone else joined, and why
+  // no facility state changes ever propagated to other connected players.
   private broadcastState() {
     const payload = {
       type: 'stateUpdate',
@@ -591,7 +601,7 @@ export class DepartmentRoom extends DurableObject {
       facility: this.state.facility,
       combat: this.state.combat,
     };
-    for (const [ws, _] of this.ctx.getWebSockets()) {
+    for (const ws of this.ctx.getWebSockets()) {
       ws.send(JSON.stringify(payload));
     }
   }
