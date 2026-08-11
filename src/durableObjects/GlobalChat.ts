@@ -14,7 +14,6 @@ export class GlobalChat extends DurableObject {
 
   constructor(ctx: DurableObjectState, env: any) {
     super(ctx, env);
-    // Load persisted messages on instantiation
     ctx.blockConcurrencyWhile(async () => {
       const stored = await ctx.storage.get<ChatMessage[]>(this.storageKey);
       if (stored && stored.length > 0) {
@@ -33,9 +32,12 @@ export class GlobalChat extends DurableObject {
       const [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server);
 
-      // Send recent messages to the new client
-      for (const msg of this.messages) {
-        server.send(JSON.stringify({ type: 'chat', ...msg }));
+      // ✅ Send history as a single batch (type: 'history')
+      if (this.messages.length > 0) {
+        server.send(JSON.stringify({
+          type: 'history',
+          messages: this.messages,
+        }));
       }
 
       return new Response(null, { status: 101, webSocket: client });
@@ -57,10 +59,9 @@ export class GlobalChat extends DurableObject {
         this.messages = this.messages.slice(-this.maxMessages);
       }
 
-      // ✅ Persist to storage so history survives hibernation
       await this.saveMessages();
 
-      // ✅ Broadcast to all connected WebSockets (fixed: direct iteration)
+      // Broadcast to all connected clients
       const payload = JSON.stringify({ type: 'chat', ...msg });
       for (const otherWs of this.ctx.getWebSockets()) {
         otherWs.send(payload);
