@@ -4,9 +4,9 @@
 // FIX: Bullet capacity enforcement and Lunacy cost.
 // FIX: departmentKey sync – send current facility.departmentKey on join.
 // FIX: HOTFIX – prevent server's null departmentKey from overwriting a valid local key.
+// FIX: Co‑op actions now ONLY send to server – no local mutations to avoid desync.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
-import useGameStore, { getDeployCost } from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
 import {
   identities,
@@ -31,6 +31,7 @@ import { DEPARTMENTS, DepartmentId } from '../data/departments';
 import { abnormalities, getAbnormalityById, type WorkType } from '../data/abnormalities';
 import { getDisplayName } from '../auth/discord';
 import GlobalChat from '../components/GlobalChat';
+import { getDeployCost } from '../store/gameStore';
 
 // ─── Constants ──────────────────────────────────────────────────────────
 const MAX_CLASH_POWER = 50;
@@ -316,7 +317,6 @@ export default function DepartmentView() {
   };
 
   // ─── WebSocket connection helpers ──────────────────────────────────
-  // ✅ FIX: include departmentKey in join payload
   const connectWebSocket = (roomId: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
     const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
@@ -325,14 +325,19 @@ export default function DepartmentView() {
 
     ws.onopen = () => {
       console.log('WebSocket connected to department room');
-      // ✅ Read the current department key from the store
       const currentDeptKey = useGameStore.getState().facility.departmentKey;
+      const deptConfig = DEPARTMENTS[currentDeptKey as DepartmentId];
+      // Send department config so server can match initial maxEnergy / maxDeployPerDay
       ws.send(JSON.stringify({
         type: 'join',
         playerId: user?.id || crypto.randomUUID(),
         playerName: getDisplayName(user),
         identityId: selectedIdentityId,
-        departmentKey: currentDeptKey, // send so server can persist it
+        departmentKey: currentDeptKey,
+        departmentConfig: {
+          maxDeployPerDay: deptConfig?.maxAbnosPerDay || 1,
+          maxEnergy: 100 + (deptConfig?.dayUnlock || 0) * 2,
+        },
       }));
     };
 
@@ -399,10 +404,20 @@ export default function DepartmentView() {
         break;
       }
 
+      case 'actionResult': {
+        if (data.success) {
+          alert(`✅ ${data.message}`);
+          addFacilityLog(data.message, 'success');
+        } else {
+          alert(`❌ ${data.message}`);
+        }
+        // The stateUpdate will refresh the UI; no further action needed.
+        break;
+      }
+
       case 'joined':
         console.log('✅ Joined room successfully:', data);
         if (data.facility) {
-          // Also apply the same hotfix in case joined contains a facility without key
           const localKey = useGameStore.getState().facility.departmentKey;
           if (data.facility && !data.facility.departmentKey && localKey) {
             data.facility.departmentKey = localKey;
@@ -596,6 +611,15 @@ export default function DepartmentView() {
     const abno = facility.deployedAbnos.find(a => a.abnoId === selectedAbnoId);
     if (!abno) return;
 
+    if (isCoop) {
+      // In co‑op, only send to server; wait for server response
+      sendAction('work', { abnoId: abno.abnoId, workType });
+      setWorkInProgress(true);
+      // The server's stateUpdate will clear the animation and update UI.
+      return;
+    }
+
+    // Solo mode: local execution
     setPendingWorkType(workType);
     setWorkInProgress(true);
     setWorkProgress(0);
@@ -641,7 +665,6 @@ export default function DepartmentView() {
     const result = workOnAbnormality(abno.abnoId, workType, user?.id || 'guest');
     setWorkResult(result);
     addFacilityLog(`${getDisplayName(user)} worked on ${abno.abnoName} (${workType}) - ${result.isSuccess ? 'Success' : 'Failed'}`, result.isSuccess ? 'success' : 'danger');
-    if (isCoop) sendAction('work', { abnoId: abno.abnoId, workType });
     if (result.breached) alert(`⚠️ ${abno.abnoName} has breached!`);
     if (result.boostDropped) alert(`🎉 Temperance Boost dropped!`);
 
@@ -910,7 +933,7 @@ export default function DepartmentView() {
 
   const deptConfig = DEPARTMENTS[facility.departmentKey as DepartmentId];
   const isManager = facility.managerId === user?.id;
-  const maxDeploy = deptConfig?.maxAbnormalities || 1;
+  const maxDeploy = deptConfig?.maxAbnosPerDay || 1;
   const requiredEnergy = getRequiredEnergyForDay(facility.currentDay);
   const canAdvance = facility.energy >= requiredEnergy;
 
@@ -1019,9 +1042,12 @@ export default function DepartmentView() {
             <div className="flex gap-2 mt-2">
               <button
                 onClick={() => {
-                  resolveOrdeal(facility.activeOrdeal!.id, true);
-                  addFacilityLog(`${getDisplayName(user)} resolved ordeal: Victory`, 'success');
-                  if (isCoop) sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: true });
+                  if (isCoop) {
+                    sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: true });
+                  } else {
+                    resolveOrdeal(facility.activeOrdeal!.id, true);
+                    addFacilityLog(`${getDisplayName(user)} resolved ordeal: Victory`, 'success');
+                  }
                 }}
                 className="px-3 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded text-sm hover:bg-red-400 hover:text-gray-900 transition"
               >
@@ -1029,9 +1055,12 @@ export default function DepartmentView() {
               </button>
               <button
                 onClick={() => {
-                  resolveOrdeal(facility.activeOrdeal!.id, false);
-                  addFacilityLog(`${getDisplayName(user)} resolved ordeal: Defeat`, 'danger');
-                  if (isCoop) sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: false });
+                  if (isCoop) {
+                    sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: false });
+                  } else {
+                    resolveOrdeal(facility.activeOrdeal!.id, false);
+                    addFacilityLog(`${getDisplayName(user)} resolved ordeal: Defeat`, 'danger');
+                  }
                 }}
                 className="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600 transition"
               >
@@ -1085,7 +1114,13 @@ export default function DepartmentView() {
           )}
           <button
             onClick={() => {
-              if (canAdvance) {
+              if (!canAdvance) {
+                alert(`❌ Need ${requiredEnergy} energy to advance`);
+                return;
+              }
+              if (isCoop) {
+                sendAction('advanceDay', {});
+              } else {
                 const result = advanceDay();
                 if (result.success) {
                   addFacilityLog(`${getDisplayName(user)} advanced to Day ${result.newDay}`, 'success');
@@ -1093,9 +1128,6 @@ export default function DepartmentView() {
                   alert(`✅ Advanced to Day ${result.newDay}`);
                   if (result.ordeal) alert(`⚠️ Ordeal triggered: ${result.ordeal.name}`);
                 } else alert(`❌ ${result.reason}`);
-                if (isCoop) sendAction('advanceDay', {});
-              } else {
-                alert(`❌ Need ${requiredEnergy} energy to advance`);
               }
             }}
             className={`px-4 py-2 border rounded transition ${canAdvance ? 'border-amber-400 text-amber-400 hover:bg-amber-400 hover:text-gray-900' : 'border-gray-600 text-gray-500 cursor-not-allowed'}`}
@@ -1300,15 +1332,18 @@ export default function DepartmentView() {
                       {isManager && !isBreaching && (
                         <button
                           onClick={() => {
-                            const newAbnos = facility.deployedAbnos.filter((a: any) => a.abnoId !== abno.abnoId);
-                            useGameStore.setState((s) => ({
-                              facility: {
-                                ...s.facility,
-                                deployedAbnos: newAbnos,
-                              },
-                            }));
-                            addFacilityLog(`${getDisplayName(user)} removed ${abno.abnoName}`, 'info');
-                            if (isCoop) sendAction('removeAbno', { abnoId: abno.abnoId });
+                            if (isCoop) {
+                              sendAction('removeAbno', { abnoId: abno.abnoId });
+                            } else {
+                              const newAbnos = facility.deployedAbnos.filter((a: any) => a.abnoId !== abno.abnoId);
+                              useGameStore.setState((s) => ({
+                                facility: {
+                                  ...s.facility,
+                                  deployedAbnos: newAbnos,
+                                },
+                              }));
+                              addFacilityLog(`${getDisplayName(user)} removed ${abno.abnoName}`, 'info');
+                            }
                           }}
                           className="text-xs px-2 py-1 border border-gray-600 text-gray-400 rounded hover:border-red-400 hover:text-red-400 transition"
                         >
@@ -1348,8 +1383,8 @@ export default function DepartmentView() {
     const canDeploy = deployedToday < maxDeploy;
     const availableAbnos = getAvailableAbnos();
 
+    // Use the shared getDeployCost from the store
     const getCost = (risk: string) => getDeployCost(facility.currentDay, risk);
-    };
 
     return (
       <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
@@ -1383,21 +1418,25 @@ export default function DepartmentView() {
                   <button
                     onClick={() => {
                       if (alreadyDeployed) return;
-                      if (!isFree && !canAfford) {
+                      if (!canAfford) {
                         alert(`❌ Not enough energy (need ${cost})`);
                         return;
                       }
-                      const result = deployAbnormality(abno.id, user?.id || 'guest');
-                      if (result.success) {
-                        alert(`✅ ${result.abnormality} deployed!`);
-                        addFacilityLog(`${getDisplayName(user)} deployed ${abno.name}`, 'success');
-                        if (isCoop) sendAction('deployAbno', { abnoId: abno.id });
-                        setView('dashboard');
+                      if (isCoop) {
+                        // Only send to server; no local mutation
+                        sendAction('deployAbno', { abnoId: abno.id });
                       } else {
-                        alert(`❌ ${result.reason}`);
+                        const result = deployAbnormality(abno.id, user?.id || 'guest');
+                        if (result.success) {
+                          alert(`✅ ${result.abnormality} deployed!`);
+                          addFacilityLog(`${getDisplayName(user)} deployed ${abno.name}`, 'success');
+                          setView('dashboard');
+                        } else {
+                          alert(`❌ ${result.reason}`);
+                        }
                       }
                     }}
-                    disabled={alreadyDeployed || (!isFree && !canAfford)}
+                    disabled={alreadyDeployed || !canAfford}
                     className={`px-3 py-1 rounded text-sm ${
                       alreadyDeployed ? 'bg-gray-700 text-gray-500 cursor-not-allowed' :
                       isFree ? 'bg-green-500/20 border border-green-400 text-green-400 hover:bg-green-400 hover:text-gray-900 transition' :
@@ -1519,7 +1558,7 @@ export default function DepartmentView() {
           </div>
         </div>
 
-        {workInProgress && (
+        {workInProgress && !isCoop && (
           <div className="mb-4 p-4 border-2 border-cyan-500/50 bg-cyan-500/10 rounded-lg shadow-lg animate-pulse">
             <div className="flex items-center gap-4 mb-2">
               <div className="text-4xl">{getRiskEmoji(selectedAbno.risk)}</div>
@@ -1542,6 +1581,11 @@ export default function DepartmentView() {
             </div>
           </div>
         )}
+        {workInProgress && isCoop && (
+          <div className="mb-4 p-4 border-2 border-cyan-500/50 bg-cyan-500/10 rounded-lg text-center text-cyan-400 animate-pulse">
+            ⏳ Sending work request to server...
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           {(['instinct', 'insight', 'attachment', 'repression'] as WorkType[]).map(type => {
@@ -1550,10 +1594,7 @@ export default function DepartmentView() {
             return (
               <button
                 key={type}
-                onClick={() => {
-                  if (isDisabled) return;
-                  executeWork(type);
-                }}
+                onClick={() => executeWork(type)}
                 disabled={isDisabled}
                 className={`p-3 border rounded transition capitalize text-sm ${
                   isDisabled
@@ -1563,8 +1604,11 @@ export default function DepartmentView() {
               >
                 <div className="font-bold">{type}</div>
                 <div className="text-xs text-gray-400">{Math.round(chance * 100)}% success</div>
-                {isDisabled && workInProgress && (
+                {isDisabled && workInProgress && !isCoop && (
                   <div className="text-[10px] text-cyan-400 animate-pulse">⏳ Working...</div>
+                )}
+                {isDisabled && workInProgress && isCoop && (
+                  <div className="text-[10px] text-cyan-400 animate-pulse">⏳ Sending...</div>
                 )}
               </button>
             );
@@ -1636,12 +1680,15 @@ export default function DepartmentView() {
                 <button
                   onClick={() => {
                     if (unlocked) return;
-                    const result = unlockResearch(r.id);
-                    if (result.success) {
-                      alert(`✅ ${r.name} unlocked!`);
-                      addFacilityLog(`${getDisplayName(user)} researched ${r.name}`, 'success');
-                      if (isCoop) sendAction('unlockResearch', { researchId: r.id });
-                    } else alert(`❌ ${result.reason}`);
+                    if (isCoop) {
+                      sendAction('unlockResearch', { researchId: r.id });
+                    } else {
+                      const result = unlockResearch(r.id);
+                      if (result.success) {
+                        alert(`✅ ${r.name} unlocked!`);
+                        addFacilityLog(`${getDisplayName(user)} researched ${r.name}`, 'success');
+                      } else alert(`❌ ${result.reason}`);
+                    }
                   }}
                   disabled={unlocked}
                   className={`px-3 py-1 rounded text-sm ${unlocked ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-purple-500/20 border border-purple-400 text-purple-400 hover:bg-purple-400 hover:text-gray-900 transition'}`}
@@ -1661,7 +1708,7 @@ export default function DepartmentView() {
     const missions = [
       { id: 'm1', name: 'First Work', description: 'Complete 1 successful work', progress: facility.missionProgress?.worksCompleted || 0, required: 1 },
       { id: 'm2', name: 'Energy Collector', description: 'Collect 50 energy', progress: facility.totalEnergy || 0, required: 50 },
-      { id: 'm3', name: 'Deployer', description: 'Deploy 3 abnormalities', progress: facility.deployedToday.length || 0, required: 3 },
+      { id: 'm3', name: 'Deployer', description: 'Deploy 3 abnormalities', progress: facility.missionProgress?.totalDeployments || 0, required: 3 },
     ];
     const completed = facility.completedMissions || [];
 
@@ -1741,19 +1788,22 @@ export default function DepartmentView() {
                       alert(`❌ Not enough Lunacy (need ${costPerBatch}, have ${lunacy})`);
                       return;
                     }
-                    // Deduct cost and add bullets
-                    useGameStore.setState(state => ({
-                      lunacy: state.lunacy - costPerBatch,
-                      facility: {
-                        ...state.facility,
-                        bullets: {
-                          ...state.facility.bullets,
-                          [b.key]: (state.facility.bullets?.[b.key] || 0) + 10,
+                    if (isCoop) {
+                      sendAction('addBullets', { type: b.key, amount: 10 });
+                    } else {
+                      // Deduct cost and add bullets locally
+                      useGameStore.setState(state => ({
+                        lunacy: state.lunacy - costPerBatch,
+                        facility: {
+                          ...state.facility,
+                          bullets: {
+                            ...state.facility.bullets,
+                            [b.key]: (state.facility.bullets?.[b.key] || 0) + 10,
+                          },
                         },
-                      },
-                    }));
-                    addFacilityLog(`Purchased ${10} ${b.label} bullets`, 'success');
-                    if (isCoop) sendAction('addBullets', { type: b.key, amount: 10 });
+                      }));
+                      addFacilityLog(`Purchased ${10} ${b.label} bullets`, 'success');
+                    }
                   }}
                   disabled={atCapacity || !canAfford}
                   className={`text-xs px-2 py-0.5 rounded transition ${
@@ -1803,14 +1853,17 @@ export default function DepartmentView() {
                 alert(`❌ Not enough Lunacy (need 1500, have ${lunacy})`);
                 return;
               }
-              const result = useMemoryRepository(targetDay);
-              if (result.success) {
-                alert(`🔄 Reset to Day ${targetDay}`);
-                addFacilityLog(`${getDisplayName(user)} used Memory Repository to Day ${targetDay}`, 'warning');
-                if (isCoop) sendAction('memoryRepository', { targetDay });
-                setView('dashboard');
+              if (isCoop) {
+                sendAction('memoryRepository', { targetDay });
               } else {
-                alert(`❌ ${result.reason}`);
+                const result = useMemoryRepository(targetDay);
+                if (result.success) {
+                  alert(`🔄 Reset to Day ${targetDay}`);
+                  addFacilityLog(`${getDisplayName(user)} used Memory Repository to Day ${targetDay}`, 'warning');
+                  setView('dashboard');
+                } else {
+                  alert(`❌ ${result.reason}`);
+                }
               }
             }}
             className="px-4 py-1 bg-indigo-500/20 border border-indigo-400 text-indigo-400 rounded hover:bg-indigo-400 hover:text-gray-900 transition"
