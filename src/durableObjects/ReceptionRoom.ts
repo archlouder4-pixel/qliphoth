@@ -95,14 +95,12 @@ export class ReceptionRoom extends DurableObject {
     if (data.type === 'findMatch') {
       const userId = data.userId || data.payload?.userId;
 
-      // 1️⃣ Check if this userId already has a slot
       let existingIdx: 0 | 1 | null = null;
       if (userId) {
         if (this.state.p1?.userId === userId) existingIdx = 0;
         else if (this.state.p2?.userId === userId) existingIdx = 1;
       }
 
-      // If the player already has a slot, reuse it
       if (existingIdx !== null) {
         const key = existingIdx === 0 ? 'p1' : 'p2';
         this.state[key] = this.buildPlayerState(data.payload, userId);
@@ -131,7 +129,6 @@ export class ReceptionRoom extends DurableObject {
         return;
       }
 
-      // 2️⃣ No existing slot – try to assign a new one
       const p1Taken = this.slotTaken('p1');
       const p2Taken = this.slotTaken('p2');
 
@@ -233,7 +230,7 @@ export class ReceptionRoom extends DurableObject {
     }
   }
 
-  // ─── RESOLVE CLASH ──────────────────────────────────────────────────
+  // ─── RESOLVE CLASH (with percentage‑based damage) ──────────────────
   private async resolveClash() {
     const p1Skill = this.state.p1.skills[this.state.p1SkillIdx!];
     const p2Skill = this.state.p2.skills[this.state.p2SkillIdx!];
@@ -272,6 +269,7 @@ export class ReceptionRoom extends DurableObject {
     if (this.state.p1.classCategory === 'Attacker') p1Mult += this.state.p1.classEffect;
     if (this.state.p2.classCategory === 'Attacker') p2Mult += this.state.p2.classEffect;
 
+    // ─── ULTIMATE GAIN ────────────────────────────────────────────────
     const ULT_GAIN_MIN = 0.0025;
     const ULT_GAIN_MAX = 0.03;
     const ultGainFromMargin = (winnerTotal: number, loserTotal: number) => {
@@ -281,10 +279,18 @@ export class ReceptionRoom extends DurableObject {
 
     let p1UltGain = 0, p2UltGain = 0;
     let p1Dmg = 0, p2Dmg = 0, won = false;
+
     if (result.playerTotal >= result.enemyTotal) {
-      const diff = Math.max(1, result.playerTotal - result.enemyTotal + result.playerTotal / 4);
-      p1Dmg = Math.max(1, Math.floor((this.state.p1.atk * (diff / 6) - this.state.p2.def * 0.5) / 16) * p1Mult * (0.85 + Math.random() * 0.3));
-      p1Dmg = Math.round(Math.min(p1Dmg, 75));
+      // p1 wins the clash
+      const diff = Math.max(1, result.playerTotal - result.enemyTotal);
+      // Base percentage: 5% + up to 25% based on margin (max diff ~50)
+      const basePercent = 0.05 + Math.min(0.25, (diff / 50) * 0.25);
+      let finalPercent = basePercent * p1Mult * (0.85 + Math.random() * 0.3);
+      // Apply skill damage multiplier if available
+      if (p1Skill.dmgMult) finalPercent *= p1Skill.dmgMult;
+      finalPercent = Math.min(0.35, Math.max(0.01, finalPercent));
+      p1Dmg = Math.floor(finalPercent * this.state.p2.maxHp);
+      p1Dmg = Math.max(1, p1Dmg);
       this.state.p2.hp = Math.max(0, this.state.p2.hp - p1Dmg);
       won = true;
       if (this.state.p1.hasUltimate) {
@@ -292,9 +298,14 @@ export class ReceptionRoom extends DurableObject {
         this.state.p1.ultimateBar = Math.min(100, this.state.p1.ultimateBar + p1UltGain * 100);
       }
     } else {
-      const diff = Math.max(1, result.enemyTotal - result.playerTotal + result.enemyTotal / 4);
-      p2Dmg = Math.max(1, Math.floor((this.state.p2.atk * (diff / 6) - this.state.p1.def * 0.5) / 16) * p2Mult * (0.85 + Math.random() * 0.3));
-      p2Dmg = Math.round(Math.min(p2Dmg, 75));
+      // p2 wins the clash
+      const diff = Math.max(1, result.enemyTotal - result.playerTotal);
+      const basePercent = 0.05 + Math.min(0.25, (diff / 50) * 0.25);
+      let finalPercent = basePercent * p2Mult * (0.85 + Math.random() * 0.3);
+      if (p2Skill.dmgMult) finalPercent *= p2Skill.dmgMult;
+      finalPercent = Math.min(0.35, Math.max(0.01, finalPercent));
+      p2Dmg = Math.floor(finalPercent * this.state.p1.maxHp);
+      p2Dmg = Math.max(1, p2Dmg);
       this.state.p1.hp = Math.max(0, this.state.p1.hp - p2Dmg);
       won = false;
       if (this.state.p2.hasUltimate) {
@@ -303,6 +314,7 @@ export class ReceptionRoom extends DurableObject {
       }
     }
 
+    // SP recovery
     if (p1Skill.type !== 'ego') this.state.p1.sp = Math.min(100, this.state.p1.sp + 10);
     if (p2Skill.type !== 'ego') this.state.p2.sp = Math.min(100, this.state.p2.sp + 10);
 
@@ -351,11 +363,9 @@ export class ReceptionRoom extends DurableObject {
     await this.ctx.storage.setAlarm(Date.now() + CLASH_RESULT_DISPLAY_MS);
   }
 
-  // ─── ALARM: auto‑cleanup and clash advance ──────────────────────────
   async alarm() {
-    // ─── Auto‑cleanup: if a match has been stuck for 5 minutes, reset ──
+    // Auto‑cleanup: if a match has been stuck for 5 minutes, reset
     if (this.state.p1?.playerName && this.state.p2?.playerName && !this.state.winner) {
-      // Check if the match is still active (players connected)
       let p1Connected = false;
       let p2Connected = false;
       for (const ws of this.ctx.getWebSockets()) {
@@ -363,8 +373,6 @@ export class ReceptionRoom extends DurableObject {
         if (sess?.playerIndex === 0) p1Connected = true;
         if (sess?.playerIndex === 1) p2Connected = true;
       }
-
-      // If both players disconnected, clean up the room
       if (!p1Connected && !p2Connected) {
         console.log(`🧹 Auto‑cleaning up abandoned ReceptionRoom: ${this.ctx.id.toString()}`);
         this.state = this.createDefaultState();
@@ -374,7 +382,7 @@ export class ReceptionRoom extends DurableObject {
       }
     }
 
-    // ─── Advance to next round after clash ─────────────────────────────
+    // Advance to next round after clash
     if (this.state.clashResult !== null) {
       await this.advanceToNextRound().catch(err => console.error('advanceToNextRound failed:', err));
     }
@@ -434,7 +442,6 @@ export class ReceptionRoom extends DurableObject {
       const loser = this.state[loserKey];
       const winner = this.state[winnerKey];
 
-      // Only handle forfeit if both players were present
       if (loser?.playerName && winner?.playerName) {
         const scoreChange = 20;
         const winnerNewScore = winner.score + scoreChange;
@@ -461,7 +468,6 @@ export class ReceptionRoom extends DurableObject {
         await this.ctx.storage.deleteAlarm();
         await this.saveState();
       } else if (loser?.playerName) {
-        // Solo player (still queued) disconnected – just free up their seat.
         this.state[loserKey] = {} as any;
         await this.saveState();
       }
