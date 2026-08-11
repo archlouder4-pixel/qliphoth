@@ -159,7 +159,6 @@ export class DepartmentRoom extends DurableObject {
     }
   }
 
-  // ─── Cost logic (aligned with client) ──────────────────────────────
   private getDeployCost(day: number, risk: string): number {
     if (risk === 'ZAYIN' || risk === 'TETH') return 0;
     if (risk === 'HE') return 10 + Math.floor(day * 0.5);
@@ -174,7 +173,6 @@ export class DepartmentRoom extends DurableObject {
     const playerName = data.playerName || 'Guest';
     const isHost = this.state.players.length === 0;
 
-    // Persist department key and config from client
     if (data.departmentKey && !this.state.facility.departmentKey) {
       this.state.facility.departmentKey = data.departmentKey;
     }
@@ -204,7 +202,6 @@ export class DepartmentRoom extends DurableObject {
 
     await this.saveState();
 
-    // Send full state directly to this new client
     ws.send(JSON.stringify({
       type: 'stateUpdate',
       players: this.state.players,
@@ -212,7 +209,6 @@ export class DepartmentRoom extends DurableObject {
       combat: this.state.combat,
     }));
 
-    // Broadcast to all others (the new client will get it twice, harmless)
     this.broadcastState();
 
     ws.send(JSON.stringify({ type: 'joined', playerIndex: this.state.players.length - 1 }));
@@ -248,7 +244,10 @@ export class DepartmentRoom extends DurableObject {
     facility.deployedToday.push(abnoId);
     this.addLog(`Deployed ${abnoData.name}`, 'success', playerId);
     await this.saveState();
+
+    // ✅ Explicitly broadcast to ALL connected sockets
     this.broadcastState();
+
     ws.send(JSON.stringify({ type: 'actionResult', success: true, message: `${abnoData.name} deployed` }));
   }
 
@@ -313,7 +312,6 @@ export class DepartmentRoom extends DurableObject {
     }
     facility.energy -= required;
     facility.currentDay += 1;
-    // Grow maxEnergy by 5, cap at 300
     facility.maxEnergy = Math.min(300, facility.maxEnergy + 5);
     facility.deployedToday = [];
     let ordeal = null;
@@ -602,8 +600,9 @@ export class DepartmentRoom extends DurableObject {
       facility: this.state.facility,
       combat: this.state.combat,
     };
+    const message = JSON.stringify(payload);
     for (const ws of this.ctx.getWebSockets()) {
-      ws.send(JSON.stringify(payload));
+      ws.send(message);
     }
   }
 }
