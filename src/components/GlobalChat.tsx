@@ -6,12 +6,6 @@ import { getDisplayName } from '../auth/discord';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
-interface ChatMessage {
-  user: string;
-  text: string;
-  timestamp: number;
-}
-
 export default function GlobalChat() {
   const { user } = useAuth();
   const { chatMessages, chatUnread, chatOpen, addChatMessage, markChatRead, toggleChat, setChatOpen } = useGameStore();
@@ -21,6 +15,7 @@ export default function GlobalChat() {
   const reconnectTimeoutRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const lastMessageTimestampRef = useRef<number>(0);
 
   // ─── Connect WebSocket ──────────────────────────────────────────────
   const connectWebSocket = () => {
@@ -39,12 +34,33 @@ export default function GlobalChat() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'chat') {
-          addChatMessage({
-            user: data.user,
-            text: data.text,
-            timestamp: data.timestamp,
-          });
+
+        if (data.type === 'history') {
+          // ✅ History batch – add messages without incrementing unread
+          const newMessages = data.messages || [];
+          for (const msg of newMessages) {
+            // Skip if already in store (prevent duplicates)
+            const exists = chatMessages.some(m => m.timestamp === msg.timestamp && m.user === msg.user && m.text === msg.text);
+            if (!exists) {
+              // Add without incrementing unread
+              useGameStore.setState((state) => ({
+                chatMessages: [...state.chatMessages, msg].slice(-100),
+              }));
+            }
+          }
+          // Update last timestamp
+          if (newMessages.length > 0) {
+            const last = newMessages[newMessages.length - 1];
+            lastMessageTimestampRef.current = last.timestamp;
+          }
+        } else if (data.type === 'chat') {
+          // ✅ Real‑time new message – increment unread if chat is closed
+          const msg = { user: data.user, text: data.text, timestamp: data.timestamp };
+          // Deduplicate by timestamp
+          const exists = chatMessages.some(m => m.timestamp === msg.timestamp && m.user === msg.user && m.text === msg.text);
+          if (!exists) {
+            addChatMessage(msg);
+          }
         }
       } catch (err) {
         console.error('Failed to parse chat message:', err);
