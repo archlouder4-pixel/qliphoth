@@ -1,5 +1,8 @@
 // ExplorationView.tsx – Full-featured Exploration Mode (Solo & Co-op)
-// Added: proper handling of WebSocket 'joined' and 'stateUpdate' messages
+// Added: custom room codes, global chat (visible only in co‑op), solo difficulty UI overlay.
+// FIX: Host detection – derive isHost from players array on 'joined' message.
+// FIX: Room code display – set roomId from server state.
+// FIX: stateUpdate updates roomPhase and phase correctly.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import {
@@ -316,7 +319,6 @@ export default function ExplorationView() {
   const [roomPhase, setRoomPhase] = useState<'lobby' | 'placeSelect' | 'difficultySelect' | 'exploring'>('lobby');
   const [isWaitingForHost, setIsWaitingForHost] = useState(false);
 
-  // Solo difficulty selector UI
   const [showDifficultySelector, setShowDifficultySelector] = useState(false);
   const [pendingPlace, setPendingPlace] = useState<any>(null);
 
@@ -541,17 +543,27 @@ export default function ExplorationView() {
         addLog(`🌐 Players: ${data.players.map((p: any) => p.name).join(', ')}`);
         break;
 
-      // ─── NEW: Handle 'joined' message from DO ────────────────────
+      // ─── FIXED: Handle 'joined' message ──────────────────────────
       case 'joined': {
         const state = data.state;
         if (!state) break;
-        // Set players from state if available
+
+        // Set room ID from server
+        if (state.roomId) setRoomId(state.roomId);
+
+        // Set players and determine if current user is host
         if (state.players) {
           setPlayers(state.players);
-          setMyPlayerIndex(state.players.findIndex((p: any) => p.id === user?.id));
-          const isHost = state.hostId === user?.id;
-          setIsHost(isHost);
+          const myPlayer = state.players.find((p: any) => p.id === user?.id);
+          if (myPlayer) {
+            setIsHost(myPlayer.isHost);
+            setMyPlayerIndex(state.players.indexOf(myPlayer));
+          } else {
+            setIsHost(false);
+            setMyPlayerIndex(-1);
+          }
         }
+
         // If there's a placeId, we are already in exploration
         if (state.placeId) {
           const placeData = explorationPlaces.find(p => p.id === state.placeId);
@@ -566,26 +578,38 @@ export default function ExplorationView() {
             setLog(state.log || ['⚔️ Exploration in progress...']);
             setPhase('exploring');
             setRoomPhase('exploring');
-            // Also set wave index if available
             if (state.currentWaveIndex !== undefined) setCurrentWaveIndex(state.currentWaveIndex);
             if (state.totalEnemiesDefeated !== undefined) setTotalEnemiesDefeated(state.totalEnemiesDefeated);
           }
         } else {
           // No place selected yet -> go to place select
           setRoomPhase('placeSelect');
-          setIsHost(state.hostId === user?.id || false);
           setIsWaitingForHost(false);
           addLog(`🌐 Joined room. Players: ${(state.players || []).map((p: any) => p.name).join(', ')}`);
         }
         break;
       }
 
-      // ─── NEW: Handle 'stateUpdate' messages (broadcast) ──────────
+      // ─── FIXED: Handle 'stateUpdate' with roomPhase updates ──────
       case 'stateUpdate': {
         const state = data.state;
         if (!state) break;
-        // Update everything from state
-        if (state.players) setPlayers(state.players);
+
+        // Update players and host status
+        if (state.players) {
+          setPlayers(state.players);
+          const myPlayer = state.players.find((p: any) => p.id === user?.id);
+          if (myPlayer) setIsHost(myPlayer.isHost);
+        }
+
+        // Update room phase based on state
+        if (state.placeId) {
+          setRoomPhase('exploring');
+          setPhase('exploring');
+        } else {
+          setRoomPhase('placeSelect');
+        }
+
         if (state.identityStates) setIdentityStates(state.identityStates);
         if (state.enemies) setEnemies(state.enemies);
         if (state.turn) setTurn(state.turn);
@@ -677,7 +701,6 @@ export default function ExplorationView() {
     setIsHost(true);
     setRoomPhase('placeSelect');
     connectWebSocket(roomId);
-    // Show the room code immediately
     addLog(`🌐 Room created. Code: ${roomId}`);
   };
 
