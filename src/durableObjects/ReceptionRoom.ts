@@ -40,13 +40,11 @@ export class ReceptionRoom extends DurableObject {
     return !!this.state[key]?.playerName;
   }
 
-  // ─── FIX: the client sends `stats: {...}` + `baseSkills`, but the frontend
-  // renders flat fields (me.hp, me.maxHp, me.skills, me.ultimateBar, etc).
-  // Flatten here so both sides agree on the shape. ──────────────────────────
+  // ─── FIX: store userId in the player state ──────────────────────────
   private buildPlayerState(payload: any, userId?: string) {
     const stats = payload?.stats || {};
     return {
-      ...stats, // hp, maxHp, atk, def, spd, sp, score, lives, shield, resolveStacks, witherStacks, bleedStacks, ultimateBar, transformationActive, transformationTurnsLeft
+      ...stats,
       playerName: payload?.playerName || 'Player',
       identityId: payload?.identityId,
       weaponId: payload?.weaponId,
@@ -62,13 +60,12 @@ export class ReceptionRoom extends DurableObject {
       ultimateDuration: payload?.ultimateDuration || 0,
       transformationPassive: payload?.transformationPassive || null,
       weaponPassive: payload?.weaponPassive || '',
-      userId,
+      userId, // store for reconnection
     };
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    // ─── DEBUG: force-clear stuck/stale room state (e.g. leftover from earlier bugs) ──
     if (url.searchParams.get('reset') === 'true') {
       this.state = this.createDefaultState();
       await this.ctx.storage.deleteAlarm();
@@ -95,11 +92,51 @@ export class ReceptionRoom extends DurableObject {
     const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
     const session = (ws.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
 
-    // ─── FIX: matchmaking entry point — this is what the client actually sends ──────
+    // ─── FIND MATCH (with reconnection support) ─────────────────────────
     if (data.type === 'findMatch') {
-      // Already assigned a seat in this room (e.g. re-sent request) — ignore duplicates.
-      if (session?.playerIndex !== undefined) return;
+      const userId = data.userId || data.payload?.userId;
 
+      // 1️⃣ Check if this userId already has a slot
+      let existingIdx: 0 | 1 | null = null;
+      if (userId) {
+        if (this.state.p1?.userId === userId) existingIdx = 0;
+        else if (this.state.p2?.userId === userId) existingIdx = 1;
+      }
+
+      // If the player already has a slot, reuse it
+      if (existingIdx !== null) {
+        const key = existingIdx === 0 ? 'p1' : 'p2';
+        // Update their state with fresh data (stats, skills, etc.)
+        this.state[key] = this.buildPlayerState(data.payload, userId);
+        ws.serializeAttachment({ playerIndex: existingIdx });
+        await this.saveState();
+
+        // If both players are now present, start the match
+        const bothFilled = this.slotTaken('p1') && this.slotTaken('p2');
+        if (bothFilled && this.state.phase !== 'p1Select' && this.state.phase !== 'p2Select') {
+          this.state.phase = 'p1Select';
+          this.state.winner = null;
+          this.state.p1SkillIdx = null;
+          this.state.p2SkillIdx = null;
+          this.state.clashResult = null;
+          await this.saveState();
+
+          // Tell each socket their seat
+          for (const sock of this.ctx.getWebSockets()) {
+            const sess = (sock.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
+            if (sess?.playerIndex !== undefined) {
+              sock.send(JSON.stringify({ type: 'roomJoined', playerIndex: sess.playerIndex }));
+            }
+          }
+          this.broadcastState();
+        } else {
+          // Still waiting for opponent
+          ws.send(JSON.stringify({ type: 'queued' }));
+        }
+        return;
+      }
+
+      // 2️⃣ No existing slot – try to assign a new one
       const p1Taken = this.slotTaken('p1');
       const p2Taken = this.slotTaken('p2');
 
@@ -110,7 +147,7 @@ export class ReceptionRoom extends DurableObject {
 
       const idx: 0 | 1 = p1Taken ? 1 : 0;
       const playerKey = idx === 0 ? 'p1' : 'p2';
-      this.state[playerKey] = this.buildPlayerState(data.payload, data.userId);
+      this.state[playerKey] = this.buildPlayerState(data.payload, userId);
       ws.serializeAttachment({ playerIndex: idx });
       await this.saveState();
 
@@ -124,7 +161,6 @@ export class ReceptionRoom extends DurableObject {
         this.state.clashResult = null;
         await this.saveState();
 
-        // Tell every connected socket its own seat, then send the fresh state.
         for (const sock of this.ctx.getWebSockets()) {
           const sess = (sock.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
           if (sess?.playerIndex !== undefined) {
@@ -138,7 +174,7 @@ export class ReceptionRoom extends DurableObject {
       return;
     }
 
-    // ─── FIX: allow a queued (not-yet-matched) player to back out ────────────────────
+    // ─── CANCEL MATCH ──────────────────────────────────────────────────
     if (data.type === 'cancelMatch') {
       const idx = session?.playerIndex;
       if (idx === undefined) return;
@@ -146,8 +182,7 @@ export class ReceptionRoom extends DurableObject {
       const key = idx === 0 ? 'p1' : 'p2';
       const otherKey = idx === 0 ? 'p2' : 'p1';
 
-      // If an opponent has already taken the other seat, the match has started —
-      // cancelling isn't meaningful anymore (they'd need to forfeit instead).
+      // If opponent already exists, the match is considered started; forfeit instead
       if (this.slotTaken(otherKey)) {
         ws.send(JSON.stringify({ type: 'error', message: 'Match already started, cannot cancel.' }));
         return;
@@ -160,12 +195,13 @@ export class ReceptionRoom extends DurableObject {
       return;
     }
 
-    // ─── FIX: respond to the leaderboard request the client sends on connect ────────
+    // ─── LEADERBOARD ──────────────────────────────────────────────────
     if (data.type === 'getLeaderboard') {
       ws.send(JSON.stringify({ type: 'leaderboard', data: [] }));
       return;
     }
 
+    // ─── LEGACY JOIN (kept for compatibility) ─────────────────────────
     if (data.type === 'join') {
       const idx = this.state.p1.playerName ? 1 : 0;
       const playerKey = idx === 0 ? 'p1' : 'p2';
@@ -178,23 +214,14 @@ export class ReceptionRoom extends DurableObject {
       return;
     }
 
+    // ─── SELECT SKILL ──────────────────────────────────────────────────
     if (data.type === 'selectSkill') {
       const idx = session?.playerIndex;
       if (idx === undefined) return;
       const key = idx === 0 ? 'p1' : 'p2';
       if (this.state[`${key}SkillIdx`] !== null) return;
-      // ─── FIX: client sends `{ type, payload }` via sendAction(), not `{ type, skillIdx }` ──
-      const skillIdx = typeof data.skillIdx === 'number' ? data.skillIdx : data.payload;
 
-      // ─── FIX: validate the index against the player's actual skill list before
-      // accepting it. Previously any number (including -1, which the client could
-      // send when Array.indexOf() failed to find a skill reference) was accepted
-      // here. Once both players had "selected", resolveClash() would look up
-      // this.state[key].skills[-1], get `undefined`, and bail out WITHOUT
-      // resetting p1SkillIdx/p2SkillIdx — leaving both players permanently stuck
-      // on "Skill submitted – waiting for opponent" / "Waiting for opponent"
-      // with no way to act again. Rejecting bad indices here stops that state
-      // from ever being written. ─────────────────────────────────────────────
+      const skillIdx = typeof data.skillIdx === 'number' ? data.skillIdx : data.payload;
       const skillsArr = this.state[key]?.skills || [];
       if (typeof skillIdx !== 'number' || skillIdx < 0 || skillIdx >= skillsArr.length) {
         ws.send(JSON.stringify({ type: 'error', message: 'Invalid skill selection.' }));
@@ -212,22 +239,11 @@ export class ReceptionRoom extends DurableObject {
     }
   }
 
-  // ─── FIX: added `async` here ──────────────────────────────────────
+  // ─── RESOLVE CLASH ──────────────────────────────────────────────────
   private async resolveClash() {
     const p1Skill = this.state.p1.skills[this.state.p1SkillIdx!];
     const p2Skill = this.state.p2.skills[this.state.p2SkillIdx!];
 
-    // ─── FIX: this used to `return` here with no cleanup whenever either
-    // skill lookup came back undefined (e.g. a stale/invalid index slipped
-    // through). Both p1SkillIdx/p2SkillIdx stayed non-null forever, so the
-    // room was permanently stuck: every client saw "submitted" state with
-    // no further messages ever arriving, i.e. the exact soft lock reported
-    // ("Waiting for opponent" forever, on both sides, whether or not the
-    // Excalibur auto-select passive fired). Now we reset the turn's
-    // selection state and re-broadcast so play can continue instead of
-    // hanging silently. The selectSkill validation above should prevent
-    // this from triggering at all going forward, but this is kept as a
-    // safety net. ──────────────────────────────────────────────────────
     if (!p1Skill || !p2Skill) {
       this.state.p1SkillIdx = null;
       this.state.p2SkillIdx = null;
@@ -262,11 +278,6 @@ export class ReceptionRoom extends DurableObject {
     if (this.state.p1.classCategory === 'Attacker') p1Mult += this.state.p1.classEffect;
     if (this.state.p2.classCategory === 'Attacker') p2Mult += this.state.p2.classEffect;
 
-    // ─── FIX: ULT gain used to be pure noise (0.25%–3% via Math.random()),
-    // completely disconnected from how decisively the clash was won. Now it's
-    // driven by the clash margin — a narrow win (e.g. 8 vs 7) gives close to
-    // the 0.25% floor, a dominant win (e.g. 8 vs 1) gives close to the 3%
-    // ceiling — while staying within the same overall range. ────────────────
     const ULT_GAIN_MIN = 0.0025;
     const ULT_GAIN_MAX = 0.03;
     const ultGainFromMargin = (winnerTotal: number, loserTotal: number) => {
@@ -274,12 +285,6 @@ export class ReceptionRoom extends DurableObject {
       return ULT_GAIN_MIN + marginRatio * (ULT_GAIN_MAX - ULT_GAIN_MIN);
     };
 
-    // ─── FIX: ultimateBar is a 0–100 scale (see ultimateReady = ultimateBar
-    // >= 100 on the frontend), but `gain` here is a 0–1 fraction (0.0025 to
-    // 0.03, i.e. "0.25% to 3%"). Adding the raw fraction straight onto a
-    // 0–100 bar only moved it by ~0.03 points per clash — at that rate the
-    // bar would need hundreds of dominant-win clashes to ever fill. Convert
-    // to bar-points (gain * 100) when applying it. ──────────────────────────
     let p1UltGain = 0, p2UltGain = 0;
     let p1Dmg = 0, p2Dmg = 0, won = false;
     if (result.playerTotal >= result.enemyTotal) {
@@ -315,21 +320,9 @@ export class ReceptionRoom extends DurableObject {
       won,
       dmg: won ? p1Dmg : p2Dmg,
       actorName: won ? this.state.p1.playerName : this.state.p2.playerName,
-      // ─── FIX: this used to report `ultimateBar / 100` — the winner's total
-      // accumulated bar — mislabeled as the gain from this clash. Report the
-      // actual amount gained this clash instead. ───────────────────────────
       ultimateGain: won ? p1UltGain : p2UltGain,
     };
 
-    // ─── FIX: broadcast the clash result NOW, while this.state.clashResult is
-    // still populated. Previously the only broadcastState() call in this
-    // function ran at the very end, by which point clashResult had already
-    // been reset back to null a few lines below — so clients never actually
-    // received a message with clashResult set, even though the HP mutation
-    // above was already baked into that same final broadcast. That's why it
-    // looked like the clash "resolved" (HP changed, log updated) without the
-    // clash result screen ever appearing: the populated state was computed
-    // but never sent. We now ship this intermediate state immediately. ────
     await this.saveState();
     this.broadcastState();
 
@@ -353,41 +346,18 @@ export class ReceptionRoom extends DurableObject {
         p2: getRankInfo(p2FinalScore).name,
       };
       this.broadcastMatchResult();
-      // ─── FIX: reset the room so it can host a new match instead of staying full forever ──
       this.state = this.createDefaultState();
-      // Clear any pending alarm from this match — nothing left to advance.
       await this.ctx.storage.deleteAlarm();
       await this.saveState();
       return;
     }
 
-    // ─── FIX (the real remaining bug): setTimeout() here doesn't survive DO
-    // hibernation. This room uses the Hibernatable WebSockets API
-    // (ctx.acceptWebSocket), which means Cloudflare is free to evict this
-    // Durable Object from memory between messages — that's the whole point
-    // of hibernation, so idle connections don't keep an isolate pinned in
-    // memory. Per Cloudflare's docs, in-memory timers (setTimeout/setInterval)
-    // do NOT survive that eviction; they're silently dropped, no error, no
-    // trace. If that happens here, advanceToNextRound() simply never runs:
-    // p1SkillIdx/p2SkillIdx stay stuck non-null forever, so the next
-    // selectSkill from either player hits the "already selected" early-return
-    // a few lines up and gets silently ignored — no further clashResult is
-    // ever computed or broadcast again. That's exactly "clashed, but the
-    // result stopped showing." The Alarm API is durably persisted (backed by
-    // storage, not the isolate's memory) and is guaranteed to fire even after
-    // the DO is evicted/hibernated, so we use that instead. ─────────────────
+    // ─── Use Alarm API for reliable delayed advance ──────────────────
     const CLASH_RESULT_DISPLAY_MS = 2500;
     await this.ctx.storage.setAlarm(Date.now() + CLASH_RESULT_DISPLAY_MS);
   }
 
-  // ─── FIX: alarm() replaces the old setTimeout-based scheduling for
-  // advanceToNextRound(). Durable Object alarms persist in storage and are
-  // redelivered even if the DO was evicted/hibernated in between, unlike
-  // setTimeout. ───────────────────────────────────────────────────────────
   async alarm() {
-    // Guard in case the room was reset (match ended / forfeit / new match)
-    // between when the alarm was scheduled and when it actually fires —
-    // nothing to advance from in that case.
     if (this.state.clashResult === null) return;
     await this.advanceToNextRound().catch(err => console.error('advanceToNextRound failed:', err));
   }
@@ -446,9 +416,7 @@ export class ReceptionRoom extends DurableObject {
       const loser = this.state[loserKey];
       const winner = this.state[winnerKey];
 
-      // ─── FIX: only treat this as a forfeit if a real match was underway ──────────
-      // Previously this ran on ANY disconnect, including a solo player who was still
-      // queued (no opponent yet) — which corrupted the room state and blocked new matches.
+      // Only handle forfeit if both players were present
       if (loser?.playerName && winner?.playerName) {
         const scoreChange = 20;
         const winnerNewScore = winner.score + scoreChange;
@@ -472,11 +440,10 @@ export class ReceptionRoom extends DurableObject {
         this.state.winner = winnerKey;
         this.broadcastMatchResult();
         this.state = this.createDefaultState();
-        // Clear any pending alarm from this match — nothing left to advance.
         await this.ctx.storage.deleteAlarm();
         await this.saveState();
       } else if (loser?.playerName) {
-        // Solo player (still queued) disconnected — just free up their seat.
+        // Solo player (still queued) disconnected – just free up their seat.
         this.state[loserKey] = {} as any;
         await this.saveState();
       }
