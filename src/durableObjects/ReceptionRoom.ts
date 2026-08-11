@@ -40,7 +40,6 @@ export class ReceptionRoom extends DurableObject {
     return !!this.state[key]?.playerName;
   }
 
-  // ─── FIX: store userId in the player state ──────────────────────────
   private buildPlayerState(payload: any, userId?: string) {
     const stats = payload?.stats || {};
     return {
@@ -60,7 +59,7 @@ export class ReceptionRoom extends DurableObject {
       ultimateDuration: payload?.ultimateDuration || 0,
       transformationPassive: payload?.transformationPassive || null,
       weaponPassive: payload?.weaponPassive || '',
-      userId, // store for reconnection
+      userId,
     };
   }
 
@@ -92,7 +91,7 @@ export class ReceptionRoom extends DurableObject {
     const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
     const session = (ws.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
 
-    // ─── FIND MATCH (with reconnection support) ─────────────────────────
+    // ─── FIND MATCH (with reconnection support) ────────────────────────
     if (data.type === 'findMatch') {
       const userId = data.userId || data.payload?.userId;
 
@@ -106,12 +105,10 @@ export class ReceptionRoom extends DurableObject {
       // If the player already has a slot, reuse it
       if (existingIdx !== null) {
         const key = existingIdx === 0 ? 'p1' : 'p2';
-        // Update their state with fresh data (stats, skills, etc.)
         this.state[key] = this.buildPlayerState(data.payload, userId);
         ws.serializeAttachment({ playerIndex: existingIdx });
         await this.saveState();
 
-        // If both players are now present, start the match
         const bothFilled = this.slotTaken('p1') && this.slotTaken('p2');
         if (bothFilled && this.state.phase !== 'p1Select' && this.state.phase !== 'p2Select') {
           this.state.phase = 'p1Select';
@@ -121,7 +118,6 @@ export class ReceptionRoom extends DurableObject {
           this.state.clashResult = null;
           await this.saveState();
 
-          // Tell each socket their seat
           for (const sock of this.ctx.getWebSockets()) {
             const sess = (sock.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
             if (sess?.playerIndex !== undefined) {
@@ -130,7 +126,6 @@ export class ReceptionRoom extends DurableObject {
           }
           this.broadcastState();
         } else {
-          // Still waiting for opponent
           ws.send(JSON.stringify({ type: 'queued' }));
         }
         return;
@@ -182,7 +177,6 @@ export class ReceptionRoom extends DurableObject {
       const key = idx === 0 ? 'p1' : 'p2';
       const otherKey = idx === 0 ? 'p2' : 'p1';
 
-      // If opponent already exists, the match is considered started; forfeit instead
       if (this.slotTaken(otherKey)) {
         ws.send(JSON.stringify({ type: 'error', message: 'Match already started, cannot cancel.' }));
         return;
@@ -201,7 +195,7 @@ export class ReceptionRoom extends DurableObject {
       return;
     }
 
-    // ─── LEGACY JOIN (kept for compatibility) ─────────────────────────
+    // ─── LEGACY JOIN ──────────────────────────────────────────────────
     if (data.type === 'join') {
       const idx = this.state.p1.playerName ? 1 : 0;
       const playerKey = idx === 0 ? 'p1' : 'p2';
@@ -357,9 +351,33 @@ export class ReceptionRoom extends DurableObject {
     await this.ctx.storage.setAlarm(Date.now() + CLASH_RESULT_DISPLAY_MS);
   }
 
+  // ─── ALARM: auto‑cleanup and clash advance ──────────────────────────
   async alarm() {
-    if (this.state.clashResult === null) return;
-    await this.advanceToNextRound().catch(err => console.error('advanceToNextRound failed:', err));
+    // ─── Auto‑cleanup: if a match has been stuck for 5 minutes, reset ──
+    if (this.state.p1?.playerName && this.state.p2?.playerName && !this.state.winner) {
+      // Check if the match is still active (players connected)
+      let p1Connected = false;
+      let p2Connected = false;
+      for (const ws of this.ctx.getWebSockets()) {
+        const sess = (ws.deserializeAttachment() || {}) as { playerIndex?: 0 | 1 };
+        if (sess?.playerIndex === 0) p1Connected = true;
+        if (sess?.playerIndex === 1) p2Connected = true;
+      }
+
+      // If both players disconnected, clean up the room
+      if (!p1Connected && !p2Connected) {
+        console.log(`🧹 Auto‑cleaning up abandoned ReceptionRoom: ${this.ctx.id.toString()}`);
+        this.state = this.createDefaultState();
+        await this.ctx.storage.deleteAlarm();
+        await this.saveState();
+        return;
+      }
+    }
+
+    // ─── Advance to next round after clash ─────────────────────────────
+    if (this.state.clashResult !== null) {
+      await this.advanceToNextRound().catch(err => console.error('advanceToNextRound failed:', err));
+    }
   }
 
   private async advanceToNextRound() {
