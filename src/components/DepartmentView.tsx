@@ -6,6 +6,7 @@
 // FIX: HOTFIX – prevent server's null departmentKey from overwriting a valid local key.
 // FIX: Co‑op actions now ONLY send to server – no local mutations to avoid desync.
 // FIX: Added 'logAdded' case to handle WebSocket message and silence console warning.
+// FIX: Department dayUnlock and maxAbnosPerDay display – corrected property names.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -925,7 +926,8 @@ export default function DepartmentView() {
               >
                 <span className="text-lg">{dept.icon}</span>
                 <span className="text-white font-bold ml-2">{dept.name}</span>
-                <p className="text-xs text-gray-400 mt-1">Unlocks Day {dept.unlockDay} · {dept.maxAbnormalities} abno/day</p>
+                {/* ✅ FIX: use dayUnlock and maxAbnosPerDay instead of unlockDay and maxAbnormalities */}
+                <p className="text-xs text-gray-400 mt-1">Unlocks Day {dept.dayUnlock} · {dept.maxAbnosPerDay} abno/day</p>
               </button>
             ))}
           </div>
