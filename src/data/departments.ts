@@ -10,17 +10,17 @@ import { OrdealEnemy } from './ordealsData';
 // ============================================================================
 
 export type DepartmentId =
-  | 'malkuth'
-  | 'yesod'
-  | 'netzach'
-  | 'hod'
-  | 'tiphereth'
-  | 'gebura'
-  | 'chesed'
-  | 'binah'
-  | 'hokma'
-  | 'daat'
-  | 'keter';
+  | 'MALKUTH'
+  | 'YESOD'
+  | 'NETZACH'
+  | 'HOD'
+  | 'TIPHERETH'
+  | 'GEBURA'
+  | 'CHESED'
+  | 'BINAH'
+  | 'HOKMA'
+  | 'DAAT'
+  | 'KETER';
 
 export type PanicType = 'fortitude' | 'prudence' | 'temperance' | 'justice';
 
@@ -53,101 +53,35 @@ export interface CoreSuppression {
 
 export interface Department {
   id: DepartmentId;
+  key: string;          // uppercase key for store matching
   name: string;
   title: string;
   description: string;
   icon: string;
+  emoji: string;         // duplicate of icon for compatibility
   color: string;
-  levelRequired: number;
-  maxAbnormalities: number;
-  unlockDay: number;
+  levelRequired: number; // manager level required (not used for day unlock)
+  maxAbnosPerDay: number;
+  dayUnlock: number;     // the actual day requirement
   research: DepartmentResearch[];
   suppressionReward: DepartmentSuppressionReward;
   coreSuppression?: CoreSuppression;
 }
 
-export interface AbnormalityInstance {
-  id: string;               // unique instance ID (e.g., "abno_whitenight_12345")
-  abnoId: string;           // the boss ID from bossData
-  name: string;
-  risk: 'ZAYIN' | 'TETH' | 'HE' | 'WAW' | 'ALEPH';
-  icon: string;
-  qliphothCounter: number;
-  maxCounter: number;
-  workResults: {
-    instinct: number;
-    insight: number;
-    attachment: number;
-    repression: number;
-  };
-  energyGain: number;
-  peBoxes: number;
-  isBreaching: boolean;
-  breachCooldown: number;
-  // Optional: store the full boss data for reference
-  _bossData?: BossData;
-}
-
-export interface Agent {
-  userId: string;
-  name: string;
-  departmentId: DepartmentId;
-  role: 'manager' | 'captain' | 'member';
-  stats: {
-    fortitude: number;
-    prudence: number;
-    temperance: number;
-    justice: number;
-  };
-  maxStats: {
-    fortitude: number;
-    prudence: number;
-    temperance: number;
-    justice: number;
-  };
-  hp: number;
-  maxHp: number;
-  sp: number;
-  maxSp: number;
-  equipment: {
-    weapon: string | null;
-    suit: string | null;
-    gift: string | null;
-  };
-  egoGifts: string[];
-  isPanic: boolean;
-  panicType: PanicType | null;
-  isDead: boolean;
-}
-
-export interface OrdealInstance {
-  id: string;
-  color: string;
-  time: 'DAWN' | 'NOON' | 'DUSK' | 'MIDNIGHT';
-  name: string;
-  description: string;
-  risk: string;
-  minDay: number;
-  enemies: OrdealEnemy[];
-  reward: { energy: number; lunacy: number };
-  active: boolean;
-}
-
-// ============================================================================
-// DEPARTMENT DEFINITIONS
-// ============================================================================
-
-export const DEPARTMENTS: Record<DepartmentId, Department> = {
-  malkuth: {
-    id: 'malkuth',
-    name: 'Malkuth',
+// ─── Shared department data (single source of truth) ──────────────
+export const DEPARTMENTS: Department[] = [
+  {
+    id: 'MALKUTH',
+    key: 'MALKUTH',
+    name: 'Control Team',
     title: 'The Kingdom',
     description: 'The foundation floor. Control and training.',
     icon: '👑',
+    emoji: '🔥',
     color: '#FF6B6B',
     levelRequired: 1,
-    maxAbnormalities: 1,
-    unlockDay: 1,
+    maxAbnosPerDay: 1,
+    dayUnlock: 1,
     research: [
       {
         id: 'tt2_protocol',
@@ -179,23 +113,24 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
     ],
     suppressionReward: {
       id: 'malkuth_reward',
-      name: 'Malkuth\'s Crown',
+      name: "Malkuth's Crown",
       description: '20% increase in Lob Points and Lunacy earned at day end',
       icon: '👑',
       effect: '+20% Lunacy & Lob Points',
     },
   },
-
-  yesod: {
-    id: 'yesod',
-    name: 'Yesod',
+  {
+    id: 'YESOD',
+    key: 'YESOD',
+    name: 'Information Team',
     title: 'The Foundation',
     description: 'Records and information management.',
     icon: '📊',
+    emoji: '📊',
     color: '#4ECDC4',
     levelRequired: 5,
-    maxAbnormalities: 1,
-    unlockDay: 3,
+    maxAbnosPerDay: 1,
+    dayUnlock: 5, // ✅ corrected
     research: [
       {
         id: 'go_visualization',
@@ -227,23 +162,24 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
     ],
     suppressionReward: {
       id: 'yesod_reward',
-      name: 'Yesod\'s Records',
+      name: "Yesod's Records",
       description: '25% increase in PE Boxes obtained from working',
       icon: '📊',
       effect: '+25% PE Boxes',
     },
   },
-
-  hod: {
-    id: 'hod',
-    name: 'Hod',
+  {
+    id: 'HOD',
+    key: 'HOD',
+    name: 'Training Team',
     title: 'The Glory',
     description: 'Education and training. Develop your agents.',
     icon: '📚',
+    emoji: '📚',
     color: '#FFE66D',
     levelRequired: 10,
-    maxAbnormalities: 1,
-    unlockDay: 6,
+    maxAbnosPerDay: 1,
+    dayUnlock: 15, // ✅ corrected
     research: [
       {
         id: 'education_manuals',
@@ -275,23 +211,24 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
     ],
     suppressionReward: {
       id: 'hod_reward',
-      name: 'Hod\'s Knowledge',
+      name: "Hod's Knowledge",
       description: 'Increased stats gained through working',
       icon: '📚',
       effect: '+50% stat gain from work',
     },
   },
-
-  netzach: {
-    id: 'netzach',
-    name: 'Netzach',
+  {
+    id: 'NETZACH',
+    key: 'NETZACH',
+    name: 'Safety Team',
     title: 'The Victory',
     description: 'Recreation and healing. Restore your agents.',
     icon: '💚',
+    emoji: '🛡️',
     color: '#51CF66',
     levelRequired: 15,
-    maxAbnormalities: 1,
-    unlockDay: 10,
+    maxAbnosPerDay: 1,
+    dayUnlock: 10, // ✅ corrected
     research: [
       {
         id: 'regenerator_mk2',
@@ -323,23 +260,24 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
     ],
     suppressionReward: {
       id: 'netzach_reward',
-      name: 'Netzach\'s Mercy',
+      name: "Netzach's Mercy",
       description: 'Heals while working with abnormalities. Main room heals at 50% efficiency.',
       icon: '💚',
       effect: 'Work healing +50%',
     },
   },
-
-  tiphereth: {
-    id: 'tiphereth',
-    name: 'Tiphereth',
+  {
+    id: 'TIPHERETH',
+    key: 'TIPHERETH',
+    name: 'Central Command',
     title: 'The Beauty',
     description: 'Weapons and bullets. Arm your agents.',
-    icon: '⚔️',
+    icon: '⚖️',
+    emoji: '⚔️',
     color: '#CC8899',
     levelRequired: 20,
-    maxAbnormalities: 2, // 2 abnormalities per day
-    unlockDay: 15,
+    maxAbnosPerDay: 2,
+    dayUnlock: 20, // ✅ corrected
     research: [
       {
         id: 'shield_bullets',
@@ -353,23 +291,24 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
     ],
     suppressionReward: {
       id: 'tiphereth_reward',
-      name: 'Tiphereth\'s Armory',
+      name: "Tiphereth's Armory",
       description: 'Pale bullets unlocked. Bullet capacity +25%',
       icon: '⚔️',
       effect: 'Pale bullets + Bullet capacity +25%',
     },
   },
-
-  gebura: {
-    id: 'gebura',
-    name: 'Gebura',
+  {
+    id: 'GEBURA',
+    key: 'GEBURA',
+    name: 'Disciplinary Team',
     title: 'The Might',
     description: 'Combat and suppression. Become the strongest.',
-    icon: '🗡️',
+    icon: '⚔️',
+    emoji: '🗡️',
     color: '#FF6B6B',
     levelRequired: 25,
-    maxAbnormalities: 1,
-    unlockDay: 20,
+    maxAbnosPerDay: 1,
+    dayUnlock: 25, // ✅ corrected
     research: [
       {
         id: 'execution_bullets',
@@ -407,17 +346,18 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
       effect: 'Dual wielding + Ego cost -25%',
     },
   },
-
-  chesed: {
-    id: 'chesed',
-    name: 'Chesed',
+  {
+    id: 'CHESED',
+    key: 'CHESED',
+    name: 'Welfare Team',
     title: 'The Mercy',
     description: 'Healing and support. Protect your agents.',
     icon: '💙',
+    emoji: '🩹',
     color: '#4A9BE8',
     levelRequired: 30,
-    maxAbnormalities: 1,
-    unlockDay: 25,
+    maxAbnosPerDay: 1,
+    dayUnlock: 30, // ✅ corrected
     research: [
       {
         id: 'hp_sp_bullets',
@@ -440,23 +380,24 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
     ],
     suppressionReward: {
       id: 'chesed_reward',
-      name: 'Chesed\'s Mercy',
+      name: "Chesed's Mercy",
       description: '25% chance to revive/restore sanity upon panic (once per day)',
       icon: '💙',
       effect: '25% panic revival chance',
     },
   },
-
-  binah: {
-    id: 'binah',
-    name: 'Binah',
+  {
+    id: 'BINAH',
+    key: 'BINAH',
+    name: 'Extraction Team',
     title: 'The Understanding',
     description: 'Extraction and singularity research.',
     icon: '🔮',
+    emoji: '🔮',
     color: '#9B59B6',
     levelRequired: 35,
-    maxAbnormalities: 1,
-    unlockDay: 30,
+    maxAbnosPerDay: 1,
+    dayUnlock: 35, // ✅ corrected
     research: [
       {
         id: 're_extraction',
@@ -494,17 +435,18 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
       effect: 'Singularities unlocked',
     },
   },
-
-  hokma: {
-    id: 'hokma',
-    name: 'Hokma',
+  {
+    id: 'HOKMA',
+    key: 'HOKMA',
+    name: 'Records Team',
     title: 'The Wisdom',
     description: 'Limit break and ultimate potential.',
     icon: '🧠',
+    emoji: '⏰',
     color: '#2C3E50',
     levelRequired: 40,
-    maxAbnormalities: 1,
-    unlockDay: 35,
+    maxAbnosPerDay: 1,
+    dayUnlock: 40, // ✅ corrected
     research: [
       {
         id: 'limit_breakers',
@@ -518,7 +460,7 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
     ],
     suppressionReward: {
       id: 'hokma_reward',
-      name: 'Hokma\'s Wisdom',
+      name: "Hokma's Wisdom",
       description: 'Increases stat caps to 130 and allows leveling self to 130',
       icon: '🧠',
       effect: 'Stat cap 130',
@@ -527,26 +469,27 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
       id: 'hokma_core',
       name: 'Hokma Core Suppression',
       description: 'Stats set to 110. Pass to unlock 130 cap.',
-      bossName: 'Hokma\'s Twilight',
+      bossName: "Hokma's Twilight",
       bossId: 'hokma_twilight',
       reward: 'Unlock 130 stat cap',
     },
   },
-
-  daat: {
-    id: 'daat',
-    name: 'Da\'at',
+  {
+    id: 'DAAT',
+    key: 'DAAT',
+    name: 'Managerial Team',
     title: 'The Knowledge',
     description: 'Knowledge and ultimate power.',
     icon: '🌟',
+    emoji: '🌌',
     color: '#FFD700',
     levelRequired: 45,
-    maxAbnormalities: 1,
-    unlockDay: 40,
+    maxAbnosPerDay: 1,
+    dayUnlock: 45, // ✅ corrected
     research: [
       {
         id: 'today_ordeals',
-        name: 'Today\'s Ordeals',
+        name: "Today's Ordeals",
         description: 'See upcoming ordeals in management logs',
         type: 'passive',
         cost: { lunacy: 800, energy: 80 },
@@ -580,17 +523,18 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
       effect: '2x stat multiplier',
     },
   },
-
-  keter: {
-    id: 'keter',
-    name: 'Keter',
+  {
+    id: 'KETER',
+    key: 'KETER',
+    name: 'Architecture Team',
     title: 'The Crown',
     description: 'The final floor. Ultimate power.',
     icon: '👑',
-    color: '#FFD700',
+    emoji: '👑',
+    color: '#E2B4BD',
     levelRequired: 50,
-    maxAbnormalities: 2, // 2 abnormalities per day (like Tiphereth)
-    unlockDay: 45,
+    maxAbnosPerDay: 2,
+    dayUnlock: 50, // ✅ corrected
     research: [
       {
         id: 'memory_repository_overclock',
@@ -628,14 +572,14 @@ export const DEPARTMENTS: Record<DepartmentId, Department> = {
       effect: '2x Qliphoth skip per day + Deployment sync',
     },
   },
-};
+];
 
 // ============================================================================
 // RESEARCH INDEX (for quick lookup)
 // ============================================================================
 
 export const DEPARTMENT_RESEARCHES: Record<string, DepartmentResearch> = {};
-Object.values(DEPARTMENTS).forEach((dept) => {
+DEPARTMENTS.forEach((dept) => {
   dept.research.forEach((r) => {
     DEPARTMENT_RESEARCHES[r.id] = r;
   });
@@ -646,12 +590,12 @@ Object.values(DEPARTMENTS).forEach((dept) => {
 // ============================================================================
 
 export function getDepartment(id: DepartmentId): Department | undefined {
-  return DEPARTMENTS[id];
+  return DEPARTMENTS.find((d) => d.id === id);
 }
 
-export function getUnlockedDepartments(level: number): DepartmentId[] {
-  return Object.values(DEPARTMENTS)
-    .filter((d) => d.levelRequired <= level)
+export function getUnlockedDepartments(day: number): DepartmentId[] {
+  return DEPARTMENTS
+    .filter((d) => d.dayUnlock <= day)
     .map((d) => d.id);
 }
 
@@ -660,6 +604,6 @@ export function getDepartmentByLevel(level: number): DepartmentId[] {
 }
 
 export function getMaxAbnormalitiesForDepartment(deptId: DepartmentId): number {
-  const dept = DEPARTMENTS[deptId];
-  return dept ? dept.maxAbnormalities : 1;
+  const dept = getDepartment(deptId);
+  return dept ? dept.maxAbnosPerDay : 1;
 }
