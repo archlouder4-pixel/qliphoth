@@ -2218,8 +2218,19 @@ const useGameStore = create<GameState>()(
           console.warn(`Department "${departmentKey}" not found. Available: ${DEPARTMENTS.map(d => d.key).join(', ')}`);
           return { success: false, reason: 'Invalid department' };
         }
+
         const state = get();
+
+        // ✅ FIX: Check if the department is unlocked by day advancement
+        if (state.facility.currentDay < deptConfig.dayUnlock) {
+          return {
+            success: false,
+            reason: `Department "${deptConfig.name}" requires Day ${deptConfig.dayUnlock}. You are on Day ${state.facility.currentDay}.`
+          };
+        }
+
         if (state.facility.isActive) return { success: false, reason: 'Already have a facility' };
+
         set({
           facility: {
             ...INITIAL_STATE.facility,
