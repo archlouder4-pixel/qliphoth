@@ -22,6 +22,9 @@ import { abnormalities } from '../data/abnormalities';
 // ── Moveset data ──────────────────────────────────────────────────────
 import { data as movesetsData } from '../data/movesets';
 
+// ── IMPORT THE SINGLE SOURCE OF TRUTH FOR DEPARTMENTS ────────────────
+import { DEPARTMENTS } from '../data/departments';
+
 export interface Moveset {
   name: string;
   rank: string;
@@ -465,19 +468,8 @@ function generateFloatingGuarantee(): number {
 const AWAKENING_CHAPTER_INDEX = 4;
 const AWAKENING_TRIAL_IDS: string[] = [];
 
-const DEPARTMENTS = [
-  { key: 'MALKUTH', name: 'Control Team', emoji: '🔥', dayUnlock: 1, maxAbnosPerDay: 1, maxMembers: 10, color: '#FF6B6B', desc: 'Control Team' },
-  { key: 'YESOD', name: 'Information Team', emoji: '📊', dayUnlock: 5, maxAbnosPerDay: 1, maxMembers: 10, color: '#4ECDC4', desc: 'Information Team' },
-  { key: 'NETZACH', name: 'Safety Team', emoji: '🛡️', dayUnlock: 10, maxAbnosPerDay: 1, maxMembers: 10, color: '#45B7D1', desc: 'Safety Team' },
-  { key: 'HOD', name: 'Training Team', emoji: '📚', dayUnlock: 15, maxAbnosPerDay: 1, maxMembers: 10, color: '#96CEB4', desc: 'Training Team' },
-  { key: 'TIPHERETH', name: 'Central Command', emoji: '⚖️', dayUnlock: 20, maxAbnosPerDay: 2, maxMembers: 12, color: '#FFEAA7', desc: 'Central Command' },
-  { key: 'GEBURA', name: 'Disciplinary Team', emoji: '⚔️', dayUnlock: 25, maxAbnosPerDay: 1, maxMembers: 10, color: '#FF8C42', desc: 'Disciplinary Team' },
-  { key: 'CHESED', name: 'Welfare Team', emoji: '🩹', dayUnlock: 30, maxAbnosPerDay: 1, maxMembers: 10, color: '#A8E6CF', desc: 'Welfare Team' },
-  { key: 'BINAH', name: 'Extraction Team', emoji: '🔮', dayUnlock: 35, maxAbnosPerDay: 1, maxMembers: 10, color: '#D4A5A5', desc: 'Extraction Team' },
-  { key: 'HOKMA', name: 'Records Team', emoji: '⏰', dayUnlock: 40, maxAbnosPerDay: 1, maxMembers: 10, color: '#B5EAD7', desc: 'Records Team' },
-  { key: 'DAAT', name: 'Managerial Team', emoji: '🌌', dayUnlock: 45, maxAbnosPerDay: 1, maxMembers: 10, color: '#C7CEE6', desc: 'Managerial Team' },
-  { key: 'KETER', name: 'Architecture Team', emoji: '👑', dayUnlock: 50, maxAbnosPerDay: 2, maxMembers: 12, color: '#E2B4BD', desc: 'Architecture Team' },
-];
+// ─── REMOVED: The local DEPARTMENTS array is no longer here.
+// Instead we import it from '../data/departments' above.
 
 const RESEARCH_DATA: Record<string, { id: string; name: string; description: string; cost: number; effect: any }[]> = {
   MALKUTH: [
@@ -2221,7 +2213,7 @@ const useGameStore = create<GameState>()(
 
         const state = get();
 
-        // ✅ FIX: Check if the department is unlocked by day advancement
+        // ✅ Check if the department is unlocked by day advancement
         if (state.facility.currentDay < deptConfig.dayUnlock) {
           return {
             success: false,
