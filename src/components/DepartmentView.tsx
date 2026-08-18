@@ -7,6 +7,10 @@
 // FIX: Co‑op actions now ONLY send to server – no local mutations to avoid desync.
 // FIX: Added 'logAdded' case to handle WebSocket message and silence console warning.
 // FIX: Department dayUnlock and maxAbnosPerDay display – corrected property names.
+// FIX: Overwrite local facility with server state on every stateUpdate.
+// FIX: Co‑op creation no longer calls createFacility locally; server creates facility.
+// FIX: Work success now sends agent's workSuccess multiplier to server.
+// FIX: Work animation clears on server's workResult.
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -189,6 +193,7 @@ export default function DepartmentView() {
     ownedWeapons,
     ownedGifts,
     equippedGifts,
+    resetFacilityToServer,
   } = useGameStore();
 
   // ─── WebSocket ref ───────────────────────────────────────────────────
@@ -339,10 +344,6 @@ export default function DepartmentView() {
           playerName: getDisplayName(user),
           identityId: selectedIdentityId,
           departmentKey: currentDeptKey,
-          departmentConfig: {
-            maxDeployPerDay: deptConfig?.maxAbnosPerDay || 1,
-            maxEnergy: 100 + (deptConfig?.dayUnlock || 0) * 2,
-          },
         }));
       }
     };
@@ -384,12 +385,10 @@ export default function DepartmentView() {
   const handleWebSocketMessage = (data: any) => {
     switch (data.type) {
       case 'stateUpdate': {
-        // ✅ HOTFIX: Prevent server's null departmentKey from overwriting a valid local one.
-        const localKey = useGameStore.getState().facility.departmentKey;
-        if (data.facility && !data.facility.departmentKey && localKey) {
-          data.facility.departmentKey = localKey;
+        // ── OVERWRITE local facility with server state ──────────────
+        if (data.facility) {
+          useGameStore.setState({ facility: data.facility });
         }
-        useGameStore.setState({ facility: data.facility });
         setPlayers(data.players || []);
         if (data.combat) {
           setCombatEnemy(data.combat.enemy);
@@ -423,10 +422,6 @@ export default function DepartmentView() {
       case 'joined':
         console.log('✅ Joined room successfully:', data);
         if (data.facility) {
-          const localKey = useGameStore.getState().facility.departmentKey;
-          if (data.facility && !data.facility.departmentKey && localKey) {
-            data.facility.departmentKey = localKey;
-          }
           useGameStore.setState({ facility: data.facility });
         }
         if (data.players) {
@@ -478,10 +473,16 @@ export default function DepartmentView() {
         break;
 
       case 'logAdded':
-        // Facility log was updated on the server – we can ignore it,
-        // since the stateUpdate already includes the full log.
-        // This case just silences the "Unhandled WebSocket message" warning.
         break;
+
+      case 'workResult': {
+        setWorkResult(data);
+        setWorkInProgress(false);
+        setWorkProgress(0);
+        setPendingWorkType(null);
+        setTimeout(() => setWorkResult(null), 3000);
+        break;
+      }
 
       case 'error':
         alert(`❌ ${data.message}`);
@@ -515,13 +516,19 @@ export default function DepartmentView() {
     setRoomId(roomId);
     setIsHost(true);
     setIsCoop(true);
-    const result = createFacility(deptId, user.id);
-    if (result.success) {
-      connectWebSocket(roomId);
-      alert(`🏢 Room created: ${roomId}`);
-    } else {
-      alert(`❌ ${result.reason}`);
-    }
+
+    // ── Do NOT call createFacility locally – rely on server ──────
+    // Instead, set local facility with departmentKey for the join payload
+    useGameStore.setState((state) => ({
+      facility: {
+        ...state.facility,
+        departmentKey: deptId,
+        isActive: false, // will be activated by server
+      },
+    }));
+
+    connectWebSocket(roomId);
+    alert(`🏢 Room created: ${roomId}`);
   };
 
   const joinDepartmentRoom = (roomId: string) => {
@@ -623,10 +630,12 @@ export default function DepartmentView() {
     if (!abno) return;
 
     if (isCoop) {
-      // In co‑op, only send to server; wait for server response
-      sendAction('work', { abnoId: abno.abnoId, workType });
+      // Send work request with agent's workSuccess multiplier
+      const stats = getAgentStats();
+      const workSuccess = stats ? stats.workSuccess : 1;
+      sendAction('work', { abnoId: abno.abnoId, workType, workSuccess });
       setWorkInProgress(true);
-      // The server's stateUpdate will clear the animation and update UI.
+      // The server's workResult will clear the animation
       return;
     }
 
@@ -874,8 +883,8 @@ export default function DepartmentView() {
                       if (code) {
                         joinDepartmentRoom(code);
                       } else {
-                        const deptId = Object.keys(DEPARTMENTS)[0] as DepartmentId;
-                        createDepartmentRoom(deptId);
+                        // Create with Malkuth by default (unlocked at day 1)
+                        createDepartmentRoom('MALKUTH');
                       }
                     }
                   }}
@@ -887,8 +896,7 @@ export default function DepartmentView() {
                     if (code) {
                       joinDepartmentRoom(code);
                     } else {
-                      const deptId = Object.keys(DEPARTMENTS)[0] as DepartmentId;
-                      createDepartmentRoom(deptId);
+                      createDepartmentRoom('MALKUTH');
                     }
                   }}
                   className="px-4 py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
@@ -910,6 +918,7 @@ export default function DepartmentView() {
                 onClick={async () => {
                   if (isCreating) return;
                   setIsCreating(true);
+                  // Solo mode – local creation
                   const result = createFacility(dept.id, user?.id || 'guest');
                   if (result.success) {
                     alert(`✅ ${dept.name} facility created!`);
@@ -926,7 +935,6 @@ export default function DepartmentView() {
               >
                 <span className="text-lg">{dept.icon}</span>
                 <span className="text-white font-bold ml-2">{dept.name}</span>
-                {/* ✅ FIX: use dayUnlock and maxAbnosPerDay instead of unlockDay and maxAbnormalities */}
                 <p className="text-xs text-gray-400 mt-1">Unlocks Day {dept.dayUnlock} · {dept.maxAbnosPerDay} abno/day</p>
               </button>
             ))}
@@ -1395,7 +1403,6 @@ export default function DepartmentView() {
     const canDeploy = deployedToday < maxDeploy;
     const availableAbnos = getAvailableAbnos();
 
-    // Use the shared getDeployCost from the store
     const getCost = (risk: string) => getDeployCost(facility.currentDay, risk);
 
     return (
@@ -1435,7 +1442,6 @@ export default function DepartmentView() {
                         return;
                       }
                       if (isCoop) {
-                        // Only send to server; no local mutation
                         sendAction('deployAbno', { abnoId: abno.id });
                       } else {
                         const result = deployAbnormality(abno.id, user?.id || 'guest');
@@ -1629,29 +1635,23 @@ export default function DepartmentView() {
 
         {workResult && (
           <div className={`mt-4 p-4 border-2 rounded-lg shadow-lg transition-all duration-500 ${
-            workResult.isSuccess
+            workResult.success
               ? 'border-green-500/50 bg-green-500/10 scale-100'
               : 'border-red-500/50 bg-red-500/10 scale-100'
           }`}>
             <div className="flex items-center gap-4">
-              <span className="text-4xl">{workResult.isSuccess ? '✅' : '❌'}</span>
+              <span className="text-4xl">{workResult.success ? '✅' : '❌'}</span>
               <div className="flex-1">
-                <p className={`text-xl font-bold ${workResult.isSuccess ? 'text-green-400' : 'text-red-400'}`}>
-                  {workResult.isSuccess ? 'GOOD' : 'BAD'} WORK RESULT
+                <p className={`text-xl font-bold ${workResult.success ? 'text-green-400' : 'text-red-400'}`}>
+                  {workResult.success ? 'GOOD' : 'BAD'} WORK RESULT
                 </p>
                 <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
                   <div>
                     <span className="text-gray-400">Energy:</span>
                     <span className="text-cyan-400 ml-1">+{workResult.energyGain}</span>
                   </div>
-                  {workResult.peBoxes > 0 && (
-                    <div>
-                      <span className="text-gray-400">PE Boxes:</span>
-                      <span className="text-amber-400 ml-1">+{workResult.peBoxes}</span>
-                    </div>
-                  )}
                 </div>
-                {workResult.breached && (
+                {workResult.breach && (
                   <p className="text-red-400 text-sm animate-pulse mt-1">⚠️ BREACH TRIGGERED!</p>
                 )}
                 {workResult.boostDropped && (
@@ -1803,7 +1803,6 @@ export default function DepartmentView() {
                     if (isCoop) {
                       sendAction('addBullets', { type: b.key, amount: 10 });
                     } else {
-                      // Deduct cost and add bullets locally
                       useGameStore.setState(state => ({
                         lunacy: state.lunacy - costPerBatch,
                         facility: {
