@@ -2149,6 +2149,16 @@ const useGameStore = create<GameState>()(
 
       loadState: (newState: Partial<GameState>) => set((s) => ({ ...s, ...newState })),
 
+      // ── NEW: Reset facility from server state ─────────────────────────
+      resetFacilityToServer: (serverFacility: any) => {
+        set((state) => ({
+          facility: {
+            ...state.facility,
+            ...serverFacility,
+          },
+        }));
+      },
+
       // ── RESONANCE ACTIONS ────────────────────────────────────────────────
       setResonanceSlot: (slotIndex: number, type: ResonanceType | null) => {
         const state = get();
