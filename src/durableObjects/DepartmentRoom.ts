@@ -34,7 +34,7 @@ export class DepartmentRoom extends DurableObject {
     return {
       players: [],
       facility: {
-        isActive: true,
+        isActive: false,
         name: 'Facility',
         managerId: null,
         departmentKey: null,
@@ -45,6 +45,7 @@ export class DepartmentRoom extends DurableObject {
         members: [],
         deployedAbnos: [],
         deployedToday: [],
+        maxDeployPerDay: 1,
         unlockedResearch: [],
         completedMissions: [],
         missionProgress: { worksCompleted: 0 },
@@ -113,7 +114,7 @@ export class DepartmentRoom extends DurableObject {
         await this.handleDeploy(ws, data.payload.abnoId, playerId);
         break;
       case 'work':
-        await this.handleWork(ws, data.payload.abnoId, data.payload.workType, playerId);
+        await this.handleWork(ws, data.payload.abnoId, data.payload.workType, playerId, data.payload.workSuccess || 1);
         break;
       case 'advanceDay':
         await this.handleAdvanceDay(ws, playerId);
@@ -173,14 +174,49 @@ export class DepartmentRoom extends DurableObject {
     const playerName = data.playerName || 'Guest';
     const isHost = this.state.players.length === 0;
 
-    if (data.departmentKey && !this.state.facility.departmentKey) {
-      this.state.facility.departmentKey = data.departmentKey;
-    }
-    if (data.departmentConfig) {
-      this.state.facility.maxDeployPerDay = data.departmentConfig.maxDeployPerDay ?? 1;
-      this.state.facility.maxEnergy = data.departmentConfig.maxEnergy ?? 100;
+    // ── Department validation ──────────────────────────────────────
+    let deptKey = data.departmentKey;
+    if (deptKey) {
+      const dept = DEPARTMENTS[deptKey as DepartmentId];
+      if (!dept) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid department' }));
+        return;
+      }
+      // If facility already exists, check if the department matches
+      if (this.state.facility.isActive && this.state.facility.departmentKey) {
+        if (this.state.facility.departmentKey !== deptKey) {
+          ws.send(JSON.stringify({ type: 'error', message: 'This room already has a different department' }));
+          return;
+        }
+      } else {
+        // New facility – check day unlock
+        const currentDay = this.state.facility.currentDay;
+        if (currentDay < dept.dayUnlock) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: `Department "${dept.name}" requires Day ${dept.dayUnlock}. You are on Day ${currentDay}.`
+          }));
+          return;
+        }
+        // Create facility
+        this.state.facility.isActive = true;
+        this.state.facility.departmentKey = deptKey;
+        this.state.facility.maxDeployPerDay = dept.maxAbnosPerDay || 1;
+        this.state.facility.maxEnergy = 100 + (dept.dayUnlock || 0) * 2;
+        this.state.facility.name = `${dept.name} Facility`;
+        this.state.facility.managerId = playerId;
+        this.state.facility.members = [playerId];
+        this.state.facility.bulletCapacityMultiplier = 1.0;
+      }
+    } else {
+      // If no departmentKey provided and facility not active, reject
+      if (!this.state.facility.isActive) {
+        ws.send(JSON.stringify({ type: 'error', message: 'No department selected' }));
+        return;
+      }
     }
 
+    // ── Add player ──────────────────────────────────────────────────
     const player: Player = {
       id: playerId,
       name: playerName,
@@ -195,8 +231,6 @@ export class DepartmentRoom extends DurableObject {
     if (!this.state.facility.members.includes(playerId)) {
       this.state.facility.members.push(playerId);
     }
-
-    this.state.facility.isActive = true;
 
     ws.serializeAttachment({ playerId });
 
@@ -227,6 +261,11 @@ export class DepartmentRoom extends DurableObject {
       ws.send(JSON.stringify({ type: 'actionResult', success: false, message: 'Already deployed' }));
       return;
     }
+    // ── Enforce daily limit ────────────────────────────────────────
+    if (facility.deployedToday.length >= facility.maxDeployPerDay) {
+      ws.send(JSON.stringify({ type: 'actionResult', success: false, message: 'Max deployments for today reached' }));
+      return;
+    }
     const cost = this.getDeployCost(facility.currentDay, abnoData.risk);
     if (facility.energy < cost) {
       ws.send(JSON.stringify({ type: 'actionResult', success: false, message: `Not enough energy (need ${cost})` }));
@@ -244,14 +283,11 @@ export class DepartmentRoom extends DurableObject {
     facility.deployedToday.push(abnoId);
     this.addLog(`Deployed ${abnoData.name}`, 'success', playerId);
     await this.saveState();
-
-    // ✅ Explicitly broadcast to ALL connected sockets
     this.broadcastState();
-
     ws.send(JSON.stringify({ type: 'actionResult', success: true, message: `${abnoData.name} deployed` }));
   }
 
-  private async handleWork(ws: WebSocket, abnoId: string, workType: string, playerId: string) {
+  private async handleWork(ws: WebSocket, abnoId: string, workType: string, playerId: string, workSuccess: number) {
     const facility = this.state.facility;
     const abnoIndex = facility.deployedAbnos.findIndex(a => a.abnoId === abnoId);
     if (abnoIndex === -1) {
@@ -269,8 +305,20 @@ export class DepartmentRoom extends DurableObject {
       return;
     }
 
-    const baseChance = abnoData.workChances?.[workType] ?? 0.5;
-    const success = Math.random() < baseChance;
+    // ── Overload penalty ────────────────────────────────────────────
+    let overloadPenalty = 0;
+    if (facility.qliphothOverload && facility.qliphothOverload[abnoId]) {
+      const overload = facility.qliphothOverload[abnoId];
+      if (overload.workCount > 2) {
+        overloadPenalty = Math.min(0.5, (overload.workCount - 2) * 0.05);
+      }
+    }
+
+    let baseChance = abnoData.workChances?.[workType] ?? 0.5;
+    // Apply agent workSuccess multiplier and overload penalty
+    let finalChance = Math.max(0.05, Math.min(1, baseChance * workSuccess - overloadPenalty));
+
+    const success = Math.random() < finalChance;
     const energyGain = success ? 10 + Math.floor(Math.random() * 20) : 3;
     facility.energy = Math.min(facility.maxEnergy, facility.energy + energyGain);
     if (success) {
@@ -280,7 +328,8 @@ export class DepartmentRoom extends DurableObject {
         this.addLog('Mission "First Work" completed!', 'success', playerId);
       }
     }
-    const breach = Math.random() < 0.05;
+    // ── Breach chance ──────────────────────────────────────────────
+    const breach = !success && Math.random() < 0.15;
     if (breach) {
       abno.qliphothCounter = 0;
       this.addLog(`${abno.abnoName} has breached!`, 'danger', playerId);
@@ -292,6 +341,15 @@ export class DepartmentRoom extends DurableObject {
       };
       this.addLog('Temperance Boost dropped!', 'success', playerId);
     }
+    // ── Update overload ─────────────────────────────────────────────
+    if (!success && (abnoData.risk === 'HE' || abnoData.risk === 'WAW' || abnoData.risk === 'ALEPH')) {
+      if (!facility.qliphothOverload) facility.qliphothOverload = {};
+      if (!facility.qliphothOverload[abnoId]) {
+        facility.qliphothOverload[abnoId] = { workCount: 0 };
+      }
+      facility.qliphothOverload[abnoId].workCount += 1;
+    }
+
     await this.saveState();
     this.broadcastState();
     ws.send(JSON.stringify({
@@ -314,6 +372,8 @@ export class DepartmentRoom extends DurableObject {
     facility.currentDay += 1;
     facility.maxEnergy = Math.min(300, facility.maxEnergy + 5);
     facility.deployedToday = [];
+    // ── Reset overload ──────────────────────────────────────────────
+    facility.qliphothOverload = {};
     let ordeal = null;
     if (facility.currentDay % 5 === 0) {
       ordeal = { name: 'Dawn Ordeal', id: `ordeal_${facility.currentDay}` };
@@ -385,6 +445,12 @@ export class DepartmentRoom extends DurableObject {
 
   private async handleAddBullets(ws: WebSocket, type: string, amount: number, playerId: string) {
     const facility = this.state.facility;
+    const capacity = Math.floor(10 * (facility.bulletCapacityMultiplier || 1));
+    const current = facility.bullets[type] || 0;
+    if (current + amount > capacity) {
+      ws.send(JSON.stringify({ type: 'error', message: `Capacity exceeded (${capacity})` }));
+      return;
+    }
     if (!facility.bullets[type]) facility.bullets[type] = 0;
     facility.bullets[type] += amount;
     this.addLog(`Added ${amount} ${type} bullets`, 'info', playerId);
@@ -446,6 +512,11 @@ export class DepartmentRoom extends DurableObject {
     }
     if (combat.initiator !== playerId) {
       ws.send(JSON.stringify({ type: 'error', message: 'Only the initiator can perform combat actions' }));
+      return;
+    }
+    // Validate turn
+    if (turn !== combat.turn) {
+      ws.send(JSON.stringify({ type: 'error', message: `Invalid turn: expected ${combat.turn}, got ${turn}` }));
       return;
     }
     combat.playerHp = playerHp;
@@ -525,10 +596,17 @@ export class DepartmentRoom extends DurableObject {
       ws.send(JSON.stringify({ type: 'error', message: 'Invalid target day' }));
       return;
     }
+    // ── Deduct Lunacy ───────────────────────────────────────────────
+    if (facility.lunacy < 1500) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Need 1500 Lunacy' }));
+      return;
+    }
+    facility.lunacy -= 1500;
     facility.currentDay = targetDay;
     facility.energy = 0;
     facility.deployedAbnos = [];
     facility.deployedToday = [];
+    facility.qliphothOverload = {};
     this.addLog(`Memory Repository used to return to Day ${targetDay}`, 'warning', playerId);
     await this.saveState();
     this.broadcastState();
