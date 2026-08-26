@@ -1,7 +1,7 @@
 // src/api/competitiveApi.ts
 // Client for the Qliphoth competitive backend – now uses VITE_SERVER_URL
 
-const BASE_URL = (import.meta.env.VITE_SERVER_URL || 'http://localhost:3001').replace(/\/+$/, '');
+const BASE_URL = (import.meta.env.VITE_SERVER_URL || 'http://ENV_VAR_MISSING:9999').replace(/\/+$/, '');
 
 export type CRRegion = 'NA' | 'SEA' | 'Asia' | 'AP';
 export type Squad = 'Beginner' | 'Amateur' | 'Expert' | 'Professional';
