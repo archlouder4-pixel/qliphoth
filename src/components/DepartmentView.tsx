@@ -1,16 +1,13 @@
-// DepartmentView.tsx – Co‑op facility management with native WebSocket
-// Added: custom room codes, global chat (visible only in co‑op)
-// FIX: selectedAbnoId instead of selectedAbnoIndex to avoid falsy-zero and index mismatch bugs.
-// FIX: Bullet capacity enforcement and Lunacy cost.
-// FIX: departmentKey sync – send current facility.departmentKey on join.
-// FIX: HOTFIX – prevent server's null departmentKey from overwriting a valid local key.
-// FIX: Co‑op actions now ONLY send to server – no local mutations to avoid desync.
-// FIX: Added 'logAdded' case to handle WebSocket message and silence console warning.
-// FIX: Department dayUnlock and maxAbnosPerDay display – corrected property names.
-// FIX: Overwrite local facility with server state on every stateUpdate.
-// FIX: Co‑op creation no longer calls createFacility locally; server creates facility.
-// FIX: Work success now sends agent's workSuccess multiplier to server.
-// FIX: Work animation clears on server's workResult.
+// src/components/DepartmentView.tsx
+// Complete UI for department management with all features:
+// - Meltdown meter & timer
+// - Active ordeals list
+// - Safe room & retry day buttons
+// - Facility logs with detailed types
+// - Panic indicators
+// - WebSocket sync for co-op
+// - Full deploy, work, research, missions, bullets, memory, and combat views
+
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -38,11 +35,10 @@ import { abnormalities, getAbnormalityById, type WorkType } from '../data/abnorm
 import { getDisplayName } from '../auth/discord';
 import GlobalChat from '../components/GlobalChat';
 import { getDeployCost } from '../store/gameStore';
+import { OrdealInstance, FacilityLogEntry } from '../types';
 
 // ─── Constants ──────────────────────────────────────────────────────────
 const MAX_CLASH_POWER = 50;
-const ULTIMATE_GAIN_MIN = 0.003;
-const ULTIMATE_GAIN_MAX = 0.03;
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://qliphoth-backend.archlouder4.workers.dev';
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -76,6 +72,39 @@ function clash(pP: number, eP: number, pC: number, eC: number) {
   return { playerTotal: pt, enemyTotal: et };
 }
 
+// ─── Timer component ──────────────────────────────────────────────────
+const MeltdownTimer = ({ expiry }: { expiry: number | null }) => {
+  if (!expiry) return null;
+  const [timeLeft, setTimeLeft] = useState(Math.max(0, Math.floor((expiry - Date.now()) / 1000)));
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const remaining = Math.max(0, Math.floor((expiry - Date.now()) / 1000));
+      setTimeLeft(remaining);
+      if (remaining <= 0) clearInterval(interval);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [expiry]);
+  return (
+    <span className={`text-sm font-mono ${timeLeft < 10 ? 'text-red-400 animate-pulse' : 'text-gray-300'}`}>
+      {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
+    </span>
+  );
+};
+
+// ─── HpBar component ──────────────────────────────────────────────────
+const HpBar = ({ value, max, color = 'green', label }: any) => {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  const colorClass = color === 'green' ? 'bg-green-500' : color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-blue-500';
+  return (
+    <div className="w-full">
+      {label && <div className="flex justify-between text-xs text-gray-400"><span>{label}</span><span>{Math.round(pct)}%</span></div>}
+      <div className="h-2 bg-gray-700 rounded overflow-hidden">
+        <div className={`h-full transition-all duration-300 ${colorClass}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+};
+
 // ─── Compute agent stats ──────────────────────────────────────────────
 function computeAgentStats(
   identityId: string,
@@ -102,7 +131,6 @@ function computeAgentStats(
 } {
   const identity = identities.find(i => i.id === identityId);
   if (!identity) throw new Error(`Identity ${identityId} not found`);
-
   const weapon = equippedWeaponId ? weapons.find(w => w.id === equippedWeaponId) : null;
   const giftStats = equippedGiftIds.reduce(
     (acc, gid) => {
@@ -117,16 +145,13 @@ function computeAgentStats(
     },
     { hp: 0, atk: 0, def: 0, spd: 0 }
   );
-
   const baseStats = scaledStats(identity, ownedIdentity.level, ownedIdentity.classSkillLevel ?? 1);
   const totalHp = baseStats.hp + giftStats.hp;
   const totalAtk = baseStats.atk + giftStats.atk + (weapon?.baseStats.atk || 0);
   const totalSpd = baseStats.spd + giftStats.spd;
   const totalDef = baseStats.def + giftStats.def;
-
   const classCategory = getClassCategory(identity.id);
   const classEffect = classCategoryEffect(ownedIdentity.classSkillLevel ?? 1);
-
   let workMult = 1.0;
   if (facility.unlockedResearch) {
     if (facility.unlockedResearch.includes('tt2_protocol')) workMult *= 1.10;
@@ -134,7 +159,6 @@ function computeAgentStats(
     if (facility.unlockedResearch.includes('professional_education')) workMult *= 1.25;
     if (facility.unlockedResearch.includes('hp_sp_bullets')) workMult *= 1.05;
   }
-
   const skills = identity.skills
     .filter(s => s.type !== 'class')
     .map((skill, idx) => {
@@ -153,7 +177,6 @@ function computeAgentStats(
         infusion: skill.infusion || identity.baseInfusion || 'Slash',
       };
     });
-
   return {
     hp: totalHp,
     maxHp: totalHp,
@@ -182,6 +205,7 @@ export default function DepartmentView() {
     deployAbnormality,
     workOnAbnormality,
     advanceDay,
+    retryDay,
     resolveOrdeal,
     suppressBreach,
     unlockResearch,
@@ -194,17 +218,18 @@ export default function DepartmentView() {
     ownedGifts,
     equippedGifts,
     resetFacilityToServer,
+    addFacilityLog,
+    goToSafeRoom,
+    leaveSafeRoom,
+    startOrdealCombat,
+    connectToRoom,
+    disconnectFromRoom,
+    sendAction,
+    wsConnected,
+    wsRoomId,
+    players,
+    combat,
   } = useGameStore();
-
-  // ─── WebSocket ref ───────────────────────────────────────────────────
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<number | null>(null);
-
-  // ─── Co‑op state ──────────────────────────────────────────────────
-  const [isCoop, setIsCoop] = useState(false);
-  const [roomId, setRoomId] = useState<string | null>(null);
-  const [players, setPlayers] = useState<{ id: string; name: string }[]>([]);
-  const [isHost, setIsHost] = useState(false);
 
   // ─── UI state ──────────────────────────────────────────────────────
   const [view, setView] = useState<'dashboard' | 'deploy' | 'work' | 'research' | 'missions' | 'bullets' | 'memory' | 'combat'>('dashboard');
@@ -214,15 +239,11 @@ export default function DepartmentView() {
   const [isCreating, setIsCreating] = useState(false);
   const [isForceLeaving, setIsForceLeaving] = useState(false);
   const [selectedIdentityId, setSelectedIdentityId] = useState<string | null>(null);
-
-  // ─── Work progress animation state ────────────────────────────────
   const [workInProgress, setWorkInProgress] = useState(false);
   const [workProgress, setWorkProgress] = useState(0);
-  const workTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [pendingWorkType, setPendingWorkType] = useState<WorkType | null>(null);
-
-  // ─── Disband confirmation ──────────────────────────────────────────
   const [showDisbandConfirm, setShowDisbandConfirm] = useState(false);
+  const workTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // ─── Combat state ──────────────────────────────────────────────────
   const [combatEnemy, setCombatEnemy] = useState<any>(null);
@@ -237,22 +258,16 @@ export default function DepartmentView() {
   const [enemyHp, setEnemyHp] = useState(0);
   const [enemyMaxHp, setEnemyMaxHp] = useState(0);
   const [combatInitiator, setCombatInitiator] = useState<string | null>(null);
+  const [ordealId, setOrdealId] = useState<string | null>(null);
+
+  // ─── Co‑op WebSocket connection ──────────────────────────────────
+  const [isCoop, setIsCoop] = useState(false);
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [isHost, setIsHost] = useState(false);
 
   // ─── Hydration ────────────────────────────────────────────────────
   const [isHydrated, setIsHydrated] = useState(false);
   useEffect(() => {
-    const stored = localStorage.getItem('qliphoth_state');
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (parsed.state?.facility?.isActive) {
-          const current = useGameStore.getState().facility;
-          if (!current.isActive) {
-            useGameStore.setState({ facility: parsed.state.facility });
-          }
-        }
-      } catch (e) {}
-    }
     setIsHydrated(true);
   }, []);
 
@@ -302,18 +317,16 @@ export default function DepartmentView() {
           activeBoost: null,
           qliphothOverload: {},
           log: [],
+          qliphothMeter: 0,
+          qliphothMax: 5,
+          meltdownActive: false,
+          meltdownTarget: null,
+          meltdownExpiresAt: null,
+          ordeals: [],
+          safeRoomUnlocked: false,
+          panicCount: 0,
         },
       }));
-      const stored = localStorage.getItem('qliphoth_state');
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          if (parsed.state?.facility) {
-            parsed.state.facility.isActive = false;
-            localStorage.setItem('qliphoth_state', JSON.stringify(parsed));
-          }
-        } catch (e) {}
-      }
       alert('✅ Emergency reset complete.');
     } catch (err) {
       console.error('Force leave error:', err);
@@ -323,190 +336,16 @@ export default function DepartmentView() {
     }
   };
 
-  // ─── WebSocket connection helpers ──────────────────────────────────
+  // ─── WebSocket connection helpers ────────────────────────────────
   const connectWebSocket = (roomId: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
-    const wsUrl = SERVER_URL.replace(/^https?:\/\//, '');
-    const ws = new WebSocket(`wss://${wsUrl}/room/department/${roomId}`);
-    wsRef.current = ws;
-
-    let joinSent = false;
-
-    ws.onopen = () => {
-      console.log('WebSocket connected to department room');
-      const currentDeptKey = useGameStore.getState().facility.departmentKey;
-      const deptConfig = DEPARTMENTS[currentDeptKey as DepartmentId];
-      if (!joinSent) {
-        joinSent = true;
-        ws.send(JSON.stringify({
-          type: 'join',
-          playerId: user?.id || crypto.randomUUID(),
-          playerName: getDisplayName(user),
-          identityId: selectedIdentityId,
-          departmentKey: currentDeptKey,
-        }));
-      }
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        handleWebSocketMessage(data);
-      } catch (err) {
-        console.error('Failed to parse WebSocket message:', err);
-      }
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket closed, reconnecting...');
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = setTimeout(() => {
-        if (roomId) connectWebSocket(roomId);
-      }, 3000);
-    };
-
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
-    };
+    connectToRoom(roomId);
   };
 
   const disconnectWebSocket = () => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
+    disconnectFromRoom();
   };
 
-  // ─── Handle incoming WebSocket messages ──────────────────────────
-  const handleWebSocketMessage = (data: any) => {
-    switch (data.type) {
-      case 'stateUpdate': {
-        // ── OVERWRITE local facility with server state ──────────────
-        if (data.facility) {
-          useGameStore.setState({ facility: data.facility });
-        }
-        setPlayers(data.players || []);
-        if (data.combat) {
-          setCombatEnemy(data.combat.enemy);
-          setCombatPlayer(data.combat.player);
-          setPlayerHp(data.combat.playerHp);
-          setPlayerMaxHp(data.combat.playerMaxHp);
-          setEnemyHp(data.combat.enemyHp);
-          setEnemyMaxHp(data.combat.enemyMaxHp);
-          setCombatTurn(data.combat.turn);
-          setClashData(data.combat.clashData || null);
-          setCombatLog(data.combat.log || []);
-          setIsCombatFinished(data.combat.isFinished);
-          setCombatInitiator(data.combat.initiator);
-          setView('combat');
-        } else {
-          setView('dashboard');
-        }
-        break;
-      }
-
-      case 'actionResult': {
-        if (data.success) {
-          alert(`✅ ${data.message}`);
-          addFacilityLog(data.message, 'success');
-        } else {
-          alert(`❌ ${data.message}`);
-        }
-        break;
-      }
-
-      case 'joined':
-        console.log('✅ Joined room successfully:', data);
-        if (data.facility) {
-          useGameStore.setState({ facility: data.facility });
-        }
-        if (data.players) {
-          setPlayers(data.players);
-        }
-        setIsCoop(true);
-        if (data.roomId && !roomId) {
-          setRoomId(data.roomId);
-        }
-        break;
-
-      case 'departmentRoomDisbanded':
-        useGameStore.setState((state) => ({
-          facility: {
-            ...state.facility,
-            isActive: false,
-            members: [],
-            deployedAbnos: [],
-            deployedToday: [],
-            log: [],
-          },
-        }));
-        setIsCoop(false);
-        setRoomId(null);
-        setPlayers([]);
-        setIsHost(false);
-        setView('dashboard');
-        alert('The room has been disbanded by the host.');
-        disconnectWebSocket();
-        break;
-
-      case 'departmentCombatAction':
-        setPlayerHp(data.playerHp);
-        setEnemyHp(data.enemyHp);
-        setClashData(data.clashData || null);
-        setCombatTurn(data.turn);
-        if (data.log) setCombatLog(prev => [...prev.slice(-20), data.log]);
-        break;
-
-      case 'departmentCombatFinished':
-        setIsCombatFinished(true);
-        setView('dashboard');
-        if (data.won) {
-          suppressBreach(data.abnoId, true);
-          addFacilityLog(`${data.initiator} suppressed ${data.enemyName}!`, 'success');
-        } else {
-          addFacilityLog(`${data.initiator} failed to suppress ${data.enemyName}.`, 'danger');
-        }
-        break;
-
-      case 'logAdded':
-        break;
-
-      case 'workResult': {
-        setWorkResult(data);
-        setWorkInProgress(false);
-        setWorkProgress(0);
-        setPendingWorkType(null);
-        setTimeout(() => setWorkResult(null), 3000);
-        break;
-      }
-
-      case 'error':
-        alert(`❌ ${data.message}`);
-        break;
-
-      case 'welcome':
-        console.log('Welcome from server:', data.message);
-        break;
-
-      default:
-        console.log('Unhandled WebSocket message:', data);
-    }
-  };
-
-  // ─── Send action via WebSocket ──────────────────────────────────
-  const sendAction = (type: string, payload?: any) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type, payload }));
-    } else {
-      alert('WebSocket is not connected. Please try again.');
-    }
-  };
-
-  // ─── Create/Join room with custom code support ──────────────────
+  // ─── Create/Join room ────────────────────────────────────────────
   const createDepartmentRoom = (deptId: string, customRoomId?: string) => {
     if (!user) {
       alert('Please log in first.');
@@ -516,17 +355,13 @@ export default function DepartmentView() {
     setRoomId(roomId);
     setIsHost(true);
     setIsCoop(true);
-
-    // ── Do NOT call createFacility locally – rely on server ──────
-    // Instead, set local facility with departmentKey for the join payload
     useGameStore.setState((state) => ({
       facility: {
         ...state.facility,
         departmentKey: deptId,
-        isActive: false, // will be activated by server
+        isActive: false,
       },
     }));
-
     connectWebSocket(roomId);
     alert(`🏢 Room created: ${roomId}`);
   };
@@ -548,7 +383,6 @@ export default function DepartmentView() {
       alert('Only the manager can disband the facility.');
       return;
     }
-
     sendAction('disbandDepartmentRoom', {});
     useGameStore.setState((state) => ({
       facility: {
@@ -567,6 +401,14 @@ export default function DepartmentView() {
         completedMissions: [],
         missionProgress: {},
         log: [],
+        qliphothMeter: 0,
+        qliphothMax: 5,
+        meltdownActive: false,
+        meltdownTarget: null,
+        meltdownExpiresAt: null,
+        ordeals: [],
+        safeRoomUnlocked: false,
+        panicCount: 0,
       },
     }));
     setIsCoop(false);
@@ -577,25 +419,6 @@ export default function DepartmentView() {
     setShowDisbandConfirm(false);
     disconnectWebSocket();
     alert('🏢 Facility disbanded.');
-  };
-
-  // ─── Facility Log helper ─────────────────────────────────────────
-  const addFacilityLog = (message: string, type: 'info' | 'success' | 'warning' | 'danger' = 'info') => {
-    const entry = {
-      timestamp: Date.now(),
-      message,
-      type,
-      player: getDisplayName(user),
-    };
-    useGameStore.setState((state) => ({
-      facility: {
-        ...state.facility,
-        log: [entry, ...(state.facility.log || [])].slice(0, 50),
-      },
-    }));
-    if (isCoop && wsRef.current) {
-      sendAction('addLog', entry);
-    }
   };
 
   // ─── Get agent stats ──────────────────────────────────────────────
@@ -616,54 +439,34 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Get available abnormalities ──────────────────────────────────
-  const getAvailableAbnos = () => {
-    const deployedIds = facility.deployedAbnos.map((a: any) => a.abnoId);
-    return abnormalities.filter(ab => !deployedIds.includes(ab.id));
-  };
-
   // ─── Execute work with animation ──────────────────────────────────
   const executeWork = (workType: WorkType) => {
     if (workInProgress) return;
     if (selectedAbnoId === null) return;
     const abno = facility.deployedAbnos.find(a => a.abnoId === selectedAbnoId);
     if (!abno) return;
-
     if (isCoop) {
-      // Send work request with agent's workSuccess multiplier
       const stats = getAgentStats();
       const workSuccess = stats ? stats.workSuccess : 1;
       sendAction('work', { abnoId: abno.abnoId, workType, workSuccess });
       setWorkInProgress(true);
-      // The server's workResult will clear the animation
       return;
     }
-
-    // Solo mode: local execution
+    // Solo mode
     setPendingWorkType(workType);
     setWorkInProgress(true);
     setWorkProgress(0);
-
     const duration = 2000;
     const interval = 50;
     const steps = duration / interval;
     let currentStep = 0;
-
-    if (workTimerRef.current) {
-      clearInterval(workTimerRef.current);
-      workTimerRef.current = null;
-    }
-
+    if (workTimerRef.current) clearInterval(workTimerRef.current);
     workTimerRef.current = setInterval(() => {
       currentStep += 1;
       const progress = Math.min(100, (currentStep / steps) * 100);
       setWorkProgress(progress);
-
       if (progress >= 100) {
-        if (workTimerRef.current) {
-          clearInterval(workTimerRef.current);
-          workTimerRef.current = null;
-        }
+        if (workTimerRef.current) clearInterval(workTimerRef.current);
         performWork(workType);
       }
     }, interval);
@@ -681,20 +484,15 @@ export default function DepartmentView() {
       setWorkProgress(0);
       return;
     }
-
     const result = workOnAbnormality(abno.abnoId, workType, user?.id || 'guest');
     setWorkResult(result);
     addFacilityLog(`${getDisplayName(user)} worked on ${abno.abnoName} (${workType}) - ${result.isSuccess ? 'Success' : 'Failed'}`, result.isSuccess ? 'success' : 'danger');
     if (result.breached) alert(`⚠️ ${abno.abnoName} has breached!`);
     if (result.boostDropped) alert(`🎉 Temperance Boost dropped!`);
-
     setWorkInProgress(false);
     setWorkProgress(0);
     setPendingWorkType(null);
-
-    setTimeout(() => {
-      setWorkResult(null);
-    }, 3000);
+    setTimeout(() => setWorkResult(null), 3000);
   };
 
   // ─── Combat action ──────────────────────────────────────────────────
@@ -707,10 +505,8 @@ export default function DepartmentView() {
     const player = combatPlayer;
     const enemy = combatEnemy;
     if (!player || !enemy) return;
-
     const skill = player.skills[selectedSkillIndex];
     if (!skill) return;
-
     const eSkill = enemy.skills[Math.floor(Math.random() * enemy.skills.length)];
     const result = clash(skill.power, eSkill.power, skill.coins, eSkill.coins);
     const dmgMult = damageTypeMult(skill.damageType || player.damageType, enemy.resistDamageType);
@@ -718,7 +514,6 @@ export default function DepartmentView() {
     const mult = dmgMult * infMult;
     let won = result.playerTotal >= result.enemyTotal;
     let dmg = 0;
-    let enemyDmg = 0;
     if (won) {
       const diff = result.playerTotal - result.enemyTotal;
       const basePercent = 0.005 + 0.0015 * diff;
@@ -730,18 +525,16 @@ export default function DepartmentView() {
       setClashData({ p: result.playerTotal, e: result.enemyTotal, won: true, dmg, actorName: player.name });
       const logMsg = `✅ ${player.name} dealt ${dmg} damage to ${enemy.name}!`;
       setCombatLog(prev => [...prev.slice(-20), logMsg]);
-      if (isCoop) {
-        sendAction('combatAction', { playerHp, enemyHp: newEnemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: true, dmg, actorName: player.name }, turn: 'resolve', log: logMsg });
-      }
+      if (isCoop) sendAction('combatAction', { playerHp, enemyHp: newEnemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: true, dmg, actorName: player.name }, turn: 'resolve', log: logMsg });
       if (newEnemyHp <= 0) {
         setIsCombatFinished(true);
         const finishLog = `🏆 ${enemy.name} defeated!`;
         setCombatLog(prev => [...prev, finishLog]);
-        addFacilityLog(`${player.name} suppressed ${enemy.name}!`, 'success');
+        addFacilityLog(`${player.name} suppressed ${enemy.name}!`, 'abno_suppressed');
         if (isCoop) {
-          sendAction('combatFinish', { abnoId: enemy.abnoId, won: true, initiator: user?.id, enemyName: enemy.name });
+          sendAction('combatFinish', { abnoId: enemy.abnoId || 'ordeal', won: true, initiator: user?.id, enemyName: enemy.name });
         } else {
-          suppressBreach(enemy.abnoId, true);
+          suppressBreach(enemy.abnoId || 'ordeal', true);
         }
         return;
       }
@@ -751,23 +544,19 @@ export default function DepartmentView() {
       let finalPercent = basePercent;
       finalPercent *= (0.85 + Math.random() * 0.3);
       finalPercent = Math.min(finalPercent, 0.15);
-      enemyDmg = Math.max(1, Math.floor(finalPercent * player.maxHp));
+      const enemyDmg = Math.max(1, Math.floor(finalPercent * player.maxHp));
       const newPlayerHp = Math.max(0, playerHp - enemyDmg);
       setPlayerHp(newPlayerHp);
       setClashData({ p: result.playerTotal, e: result.enemyTotal, won: false, dmg: enemyDmg, actorName: enemy.name });
       const logMsg = `❌ ${enemy.name} dealt ${enemyDmg} damage to ${player.name}!`;
       setCombatLog(prev => [...prev.slice(-20), logMsg]);
-      if (isCoop) {
-        sendAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: false, dmg: enemyDmg, actorName: enemy.name }, turn: 'resolve', log: logMsg });
-      }
+      if (isCoop) sendAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: { p: result.playerTotal, e: result.enemyTotal, won: false, dmg: enemyDmg, actorName: enemy.name }, turn: 'resolve', log: logMsg });
       if (newPlayerHp <= 0) {
         setIsCombatFinished(true);
         const finishLog = `💀 ${player.name} has fallen!`;
         setCombatLog(prev => [...prev, finishLog]);
-        addFacilityLog(`${player.name} was defeated by ${enemy.name}!`, 'danger');
-        if (isCoop) {
-          sendAction('combatFinish', { abnoId: enemy.abnoId, won: false, initiator: user?.id, enemyName: enemy.name });
-        }
+        addFacilityLog(`${player.name} was defeated by ${enemy.name}!`, 'death');
+        if (isCoop) sendAction('combatFinish', { abnoId: enemy.abnoId || 'ordeal', won: false, initiator: user?.id, enemyName: enemy.name });
         return;
       }
     }
@@ -800,24 +589,18 @@ export default function DepartmentView() {
         setPlayerHp(newPlayerHp);
         const logMsg = `👊 ${enemy.name} attacks for ${dmg} damage.`;
         setCombatLog(prev => [...prev.slice(-20), logMsg]);
-        if (isCoop) {
-          sendAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
-        }
+        if (isCoop) sendAction('combatAction', { playerHp: newPlayerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
         if (newPlayerHp <= 0) {
           setIsCombatFinished(true);
           setCombatLog(prev => [...prev, `💀 ${player.name} has fallen!`]);
-          addFacilityLog(`${player.name} was defeated by ${enemy.name}!`, 'danger');
-          if (isCoop) {
-            sendAction('combatFinish', { abnoId: enemy.abnoId, won: false, initiator: user?.id, enemyName: enemy.name });
-          }
+          addFacilityLog(`${player.name} was defeated by ${enemy.name}!`, 'death');
+          if (isCoop) sendAction('combatFinish', { abnoId: enemy.abnoId || 'ordeal', won: false, initiator: user?.id, enemyName: enemy.name });
           return;
         }
       } else {
         const logMsg = `🛡️ ${player.name} blocked the attack.`;
         setCombatLog(prev => [...prev.slice(-20), logMsg]);
-        if (isCoop) {
-          sendAction('combatAction', { playerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
-        }
+        if (isCoop) sendAction('combatAction', { playerHp, enemyHp, clashData: null, turn: 'player', log: logMsg });
       }
       setCombatTurn('player');
       setClashData(null);
@@ -838,101 +621,55 @@ export default function DepartmentView() {
       <div className="p-8 max-w-2xl mx-auto">
         <h2 className="text-2xl font-bold text-cyan-400 mb-4">🏢 Facility Management</h2>
         <p className="text-gray-400 mb-6">You don't have a facility yet. Create one to start managing abnormalities!</p>
-
         <div className="mb-6 p-3 border border-red-500/30 bg-red-500/10 rounded-lg">
           <p className="text-red-400 text-sm mb-2">⚠️ Stuck? Use emergency leave:</p>
-          <button
-            onClick={handleForceLeave}
-            disabled={isForceLeaving}
-            className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-500 hover:text-white transition disabled:opacity-50"
-          >
+          <button onClick={handleForceLeave} disabled={isForceLeaving} className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-500 hover:text-white transition disabled:opacity-50">
             {isForceLeaving ? 'Processing...' : '🚪 Emergency Leave'}
           </button>
         </div>
-
         <div className="flex gap-2 mb-4">
-          <button
-            onClick={() => setIsCoop(false)}
-            className={`px-4 py-2 border rounded ${!isCoop ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400'}`}
-          >
+          <button onClick={() => setIsCoop(false)} className={`px-4 py-2 border rounded ${!isCoop ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400'}`}>
             🎮 Solo
           </button>
-          <button
-            onClick={() => setIsCoop(true)}
-            className={`px-4 py-2 border rounded ${isCoop ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400'}`}
-          >
+          <button onClick={() => setIsCoop(true)} className={`px-4 py-2 border rounded ${isCoop ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400'}`}>
             🌐 Co‑op
           </button>
         </div>
-
         {isCoop ? (
           <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
             <h3 className="text-sm font-bold text-cyan-400 mb-2">🌐 Co‑op Lobby</h3>
             <p className="text-sm text-gray-400 mb-4">Create a room or join by code.</p>
             <div className="flex flex-col gap-3">
               <div className="flex gap-2 items-center">
-                <input
-                  type="text"
-                  placeholder="Room Code (empty = auto-generate)"
-                  className="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 text-white focus:border-cyan-400 outline-none rounded"
-                  id="roomCodeInput"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const input = e.target as HTMLInputElement;
-                      const code = input.value.trim();
-                      if (code) {
-                        joinDepartmentRoom(code);
-                      } else {
-                        // Create with Malkuth by default (unlocked at day 1)
-                        createDepartmentRoom('MALKUTH');
-                      }
-                    }
-                  }}
-                />
-                <button
-                  onClick={() => {
-                    const input = document.getElementById('roomCodeInput') as HTMLInputElement;
-                    const code = input.value.trim();
-                    if (code) {
-                      joinDepartmentRoom(code);
-                    } else {
-                      createDepartmentRoom('MALKUTH');
-                    }
-                  }}
-                  className="px-4 py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
-                >
+                <input type="text" placeholder="Room Code (empty = auto-generate)" className="flex-1 bg-gray-800 border border-gray-700 px-3 py-2 text-white focus:border-cyan-400 outline-none rounded" id="roomCodeInput" />
+                <button onClick={() => {
+                  const input = document.getElementById('roomCodeInput') as HTMLInputElement;
+                  const code = input.value.trim();
+                  if (code) joinDepartmentRoom(code);
+                  else createDepartmentRoom('MALKUTH');
+                }} className="px-4 py-2 bg-cyan-400/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition">
                   Join / Create
                 </button>
               </div>
-              <p className="text-xs text-gray-500">If you leave code empty, a random one will be generated.</p>
-              {roomId && (
-                <p className="text-xs text-cyan-400">Room Code: <span className="font-mono font-bold">{roomId}</span></p>
-              )}
+              {roomId && <p className="text-xs text-cyan-400">Room Code: <span className="font-mono font-bold">{roomId}</span></p>}
             </div>
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             {Object.values(DEPARTMENTS).map(dept => (
-              <button
-                key={dept.id}
-                onClick={async () => {
-                  if (isCreating) return;
-                  setIsCreating(true);
-                  // Solo mode – local creation
-                  const result = createFacility(dept.id, user?.id || 'guest');
-                  if (result.success) {
-                    alert(`✅ ${dept.name} facility created!`);
-                    setIsCreating(false);
-                    window.location.reload();
-                  } else {
-                    alert(`❌ ${result.reason}`);
-                    setIsCreating(false);
-                  }
-                }}
-                className="p-3 border border-gray-700 rounded hover:border-cyan-400 transition text-left disabled:opacity-50"
-                style={{ borderColor: dept.color }}
-                disabled={isCreating}
-              >
+              <button key={dept.id} onClick={async () => {
+                if (isCreating) return;
+                setIsCreating(true);
+                const result = createFacility(dept.id, user?.id || 'guest');
+                if (result.success) {
+                  alert(`✅ ${dept.name} facility created!`);
+                  setIsCreating(false);
+                  window.location.reload();
+                } else {
+                  alert(`❌ ${result.reason}`);
+                  setIsCreating(false);
+                }
+              }} className="p-3 border border-gray-700 rounded hover:border-cyan-400 transition text-left disabled:opacity-50" style={{ borderColor: dept.color }} disabled={isCreating}>
                 <span className="text-lg">{dept.icon}</span>
                 <span className="text-white font-bold ml-2">{dept.name}</span>
                 <p className="text-xs text-gray-400 mt-1">Unlocks Day {dept.dayUnlock} · {dept.maxAbnosPerDay} abno/day</p>
@@ -940,24 +677,20 @@ export default function DepartmentView() {
             ))}
           </div>
         )}
-        <button
-          onClick={() => joinFacility(user?.id || 'guest')}
-          className="mt-4 px-4 py-2 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
-          disabled={isCreating}
-        >
+        <button onClick={() => joinFacility(user?.id || 'guest')} className="mt-4 px-4 py-2 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition" disabled={isCreating}>
           Join Existing Facility
         </button>
       </div>
     );
   }
 
-  const deptConfig = DEPARTMENTS[facility.departmentKey as DepartmentId];
+  const deptConfig = DEPARTMENTS.find(d => d.key === facility.departmentKey);
   const isManager = facility.managerId === user?.id;
   const maxDeploy = deptConfig?.maxAbnosPerDay || 1;
   const requiredEnergy = getRequiredEnergyForDay(facility.currentDay);
   const canAdvance = facility.energy >= requiredEnergy;
 
-  // ─── Render: Dashboard ─────────────────────────────────────────────
+  // ─── Dashboard Render ─────────────────────────────────────────────
   const renderDashboard = () => {
     const boost = facility.activeBoost;
     const boostRemaining = boost ? Math.floor((boost.expiresAt - Date.now()) / 1000) : 0;
@@ -968,19 +701,6 @@ export default function DepartmentView() {
       name: identities.find(i => i.id === o.identityId)?.name || o.identityId,
       portrait: identities.find(i => i.id === o.identityId)?.portrait || '👤',
     }));
-
-    const HpBar = ({ value, max, color = 'green', label }: any) => {
-      const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
-      const colorClass = color === 'green' ? 'bg-green-500' : color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-blue-500';
-      return (
-        <div className="w-full">
-          {label && <div className="flex justify-between text-xs text-gray-400"><span>{label}</span><span>{Math.round(pct)}%</span></div>}
-          <div className="h-2 bg-gray-700 rounded overflow-hidden">
-            <div className={`h-full transition-all duration-300 ${colorClass}`} style={{ width: `${pct}%` }} />
-          </div>
-        </div>
-      );
-    };
 
     return (
       <div className="space-y-4">
@@ -1011,15 +731,7 @@ export default function DepartmentView() {
           <p className="text-xs text-gray-400 mb-1">Select an identity for work & combat:</p>
           <div className="flex flex-wrap gap-2">
             {identityOptions.map(opt => (
-              <button
-                key={opt.id}
-                onClick={() => setSelectedIdentityId(opt.id)}
-                className={`px-3 py-1 text-sm font-mono border rounded transition ${
-                  selectedIdentityId === opt.id
-                    ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400'
-                    : 'border-gray-700 text-gray-400 hover:border-cyan-400/50'
-                }`}
-              >
+              <button key={opt.id} onClick={() => setSelectedIdentityId(opt.id)} className={`px-3 py-1 text-sm font-mono border rounded transition ${selectedIdentityId === opt.id ? 'border-cyan-400 bg-cyan-400/20 text-cyan-400' : 'border-gray-700 text-gray-400 hover:border-cyan-400/50'}`}>
                 {opt.portrait} {opt.name}
               </button>
             ))}
@@ -1054,36 +766,92 @@ export default function DepartmentView() {
           </div>
         )}
 
-        {/* Active Ordeal */}
+        {/* Meltdown Display */}
+        <div className="border border-amber-500/30 bg-amber-500/10 p-3 rounded">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-amber-400 font-bold">⚡ Qliphoth Level: {facility.qliphothLevel}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-xs text-gray-400">Meltdown Meter</span>
+                <div className="w-48 h-2 bg-gray-700 rounded overflow-hidden">
+                  <div className="h-full bg-amber-400 transition-all duration-300" style={{ width: `${(facility.qliphothMeter / facility.qliphothMax) * 100}%` }} />
+                </div>
+                <span className="text-xs text-gray-400 font-mono">{facility.qliphothMeter}/{facility.qliphothMax}</span>
+              </div>
+            </div>
+            {facility.meltdownActive && (
+              <div className="text-right border-l border-amber-500/30 pl-3">
+                <p className="text-red-400 font-bold animate-pulse">⚠️ MELTDOWN!</p>
+                <p className="text-sm text-amber-300">
+                  Target: {facility.deployedAbnos.find(a => a.abnoId === facility.meltdownTarget)?.abnoName || 'Unknown'}
+                </p>
+                <MeltdownTimer expiry={facility.meltdownExpiresAt} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Active Ordeals (new system) */}
+        {facility.ordeals && facility.ordeals.filter(o => !o.resolved).length > 0 && (
+          <div className="border border-red-500/30 bg-red-500/10 p-3 rounded">
+            <p className="text-red-400 font-bold">🌪️ Active Ordeals</p>
+            {facility.ordeals.filter(o => !o.resolved).map(ordeal => (
+              <div key={ordeal.id} className="flex items-center justify-between border-b border-gray-700 py-1">
+                <span className="text-white">{ordeal.tier} {ordeal.enemyType} – {ordeal.enemies.length} enemies</span>
+                <button onClick={() => {
+                  const enemy = ordeal.enemies[0];
+                  if (!enemy) return;
+                  const playerStats = getAgentStats();
+                  if (!playerStats) { alert('Select an identity first.'); return; }
+                  const player = {
+                    name: identities.find(i => i.id === selectedIdentityId)?.name || 'Agent',
+                    hp: playerStats.maxHp,
+                    maxHp: playerStats.maxHp,
+                    atk: playerStats.atk,
+                    def: playerStats.def,
+                    damageType: playerStats.damageType,
+                    infusion: playerStats.infusion,
+                    skills: playerStats.skills,
+                  };
+                  setCombatEnemy(enemy);
+                  setCombatPlayer(player);
+                  setPlayerHp(player.hp);
+                  setPlayerMaxHp(player.maxHp);
+                  setEnemyHp(enemy.hp);
+                  setEnemyMaxHp(enemy.maxHp);
+                  setCombatTurn('player');
+                  setSelectedSkillIndex(0);
+                  setClashData(null);
+                  setCombatLog([`⚔️ Fighting ${enemy.name} (Ordeal)`]);
+                  setIsCombatFinished(false);
+                  setCombatInitiator(user?.id || null);
+                  setOrdealId(ordeal.id);
+                  setView('combat');
+                  if (isCoop) sendAction('startOrdealCombat', { ordealId: ordeal.id, enemyIndex: 0 });
+                }} className="px-3 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900">
+                  Fight
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Active Ordeal (old system from game) */}
         {facility.activeOrdeal && (
           <div className="border border-red-500/30 bg-red-500/10 p-3 rounded">
             <p className="text-red-400 font-bold">⚠️ ORDEAL IN PROGRESS</p>
             <p className="text-white">{facility.activeOrdeal.name}</p>
             <div className="flex gap-2 mt-2">
-              <button
-                onClick={() => {
-                  if (isCoop) {
-                    sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: true });
-                  } else {
-                    resolveOrdeal(facility.activeOrdeal!.id, true);
-                    addFacilityLog(`${getDisplayName(user)} resolved ordeal: Victory`, 'success');
-                  }
-                }}
-                className="px-3 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded text-sm hover:bg-red-400 hover:text-gray-900 transition"
-              >
+              <button onClick={() => {
+                if (isCoop) sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: true });
+                else { resolveOrdeal(facility.activeOrdeal!.id, true); addFacilityLog(`${getDisplayName(user)} resolved ordeal: Victory`, 'success'); }
+              }} className="px-3 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded text-sm hover:bg-red-400 hover:text-gray-900 transition">
                 Resolve (Victory)
               </button>
-              <button
-                onClick={() => {
-                  if (isCoop) {
-                    sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: false });
-                  } else {
-                    resolveOrdeal(facility.activeOrdeal!.id, false);
-                    addFacilityLog(`${getDisplayName(user)} resolved ordeal: Defeat`, 'danger');
-                  }
-                }}
-                className="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600 transition"
-              >
+              <button onClick={() => {
+                if (isCoop) sendAction('resolveOrdeal', { id: facility.activeOrdeal!.id, victory: false });
+                else { resolveOrdeal(facility.activeOrdeal!.id, false); addFacilityLog(`${getDisplayName(user)} resolved ordeal: Defeat`, 'danger'); }
+              }} className="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600 transition">
                 Resolve (Defeat)
               </button>
             </div>
@@ -1092,129 +860,74 @@ export default function DepartmentView() {
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => setView('deploy')}
-            className="px-4 py-2 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
-          >
+          <button onClick={() => setView('deploy')} className="px-4 py-2 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition">
             📦 Deploy Abnormality
           </button>
-          <button
-            onClick={() => setView('work')}
-            className="px-4 py-2 bg-green-500/20 border border-green-400 text-green-400 rounded hover:bg-green-400 hover:text-gray-900 transition"
-          >
+          <button onClick={() => setView('work')} className="px-4 py-2 bg-green-500/20 border border-green-400 text-green-400 rounded hover:bg-green-400 hover:text-gray-900 transition">
             🔨 Work
           </button>
-          <button
-            onClick={() => setView('research')}
-            className="px-4 py-2 bg-purple-500/20 border border-purple-400 text-purple-400 rounded hover:bg-purple-400 hover:text-gray-900 transition"
-          >
+          <button onClick={() => setView('research')} className="px-4 py-2 bg-purple-500/20 border border-purple-400 text-purple-400 rounded hover:bg-purple-400 hover:text-gray-900 transition">
             🔬 Research
           </button>
-          <button
-            onClick={() => setView('missions')}
-            className="px-4 py-2 bg-amber-500/20 border border-amber-400 text-amber-400 rounded hover:bg-amber-400 hover:text-gray-900 transition"
-          >
+          <button onClick={() => setView('missions')} className="px-4 py-2 bg-amber-500/20 border border-amber-400 text-amber-400 rounded hover:bg-amber-400 hover:text-gray-900 transition">
             📜 Missions
           </button>
-          {isManager && (
-            <button
-              onClick={() => setView('bullets')}
-              className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition"
-            >
-              🔫 Bullets
-            </button>
-          )}
-          {isManager && facility.memoryRepositoryAvailable && (
-            <button
-              onClick={() => setView('memory')}
-              className="px-4 py-2 bg-indigo-500/20 border border-indigo-400 text-indigo-400 rounded hover:bg-indigo-400 hover:text-gray-900 transition"
-            >
-              🔄 Memory
-            </button>
-          )}
-          <button
-            onClick={() => {
-              if (!canAdvance) {
-                alert(`❌ Need ${requiredEnergy} energy to advance`);
-                return;
-              }
-              if (isCoop) {
-                sendAction('advanceDay', {});
-              } else {
-                const result = advanceDay();
-                if (result.success) {
-                  addFacilityLog(`${getDisplayName(user)} advanced to Day ${result.newDay}`, 'success');
-                  if (result.ordeal) addFacilityLog(`Ordeal triggered: ${result.ordeal.name}`, 'warning');
-                  alert(`✅ Advanced to Day ${result.newDay}`);
-                  if (result.ordeal) alert(`⚠️ Ordeal triggered: ${result.ordeal.name}`);
-                } else alert(`❌ ${result.reason}`);
-              }
-            }}
-            className={`px-4 py-2 border rounded transition ${canAdvance ? 'border-amber-400 text-amber-400 hover:bg-amber-400 hover:text-gray-900' : 'border-gray-600 text-gray-500 cursor-not-allowed'}`}
-          >
+          {isManager && <button onClick={() => setView('bullets')} className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition">🔫 Bullets</button>}
+          {isManager && facility.memoryRepositoryAvailable && <button onClick={() => setView('memory')} className="px-4 py-2 bg-indigo-500/20 border border-indigo-400 text-indigo-400 rounded hover:bg-indigo-400 hover:text-gray-900 transition">🔄 Memory</button>}
+          <button onClick={() => {
+            if (!canAdvance) { alert(`❌ Need ${requiredEnergy} energy to advance`); return; }
+            if (isCoop) sendAction('advanceDay', {});
+            else {
+              const result = advanceDay();
+              if (result.success) {
+                addFacilityLog(`${getDisplayName(user)} advanced to Day ${result.newDay}`, 'success');
+                if (result.ordeal) addFacilityLog(`Ordeal triggered: ${result.ordeal.name}`, 'warning');
+                alert(`✅ Advanced to Day ${result.newDay}`);
+                if (result.ordeal) alert(`⚠️ Ordeal triggered: ${result.ordeal.name}`);
+              } else alert(`❌ ${result.reason}`);
+            }
+          }} className={`px-4 py-2 border rounded transition ${canAdvance ? 'border-amber-400 text-amber-400 hover:bg-amber-400 hover:text-gray-900' : 'border-gray-600 text-gray-500 cursor-not-allowed'}`}>
             ➡️ Advance Day ({requiredEnergy}⚡)
           </button>
 
-          {/* ─── LEAVE / DISBAND BUTTON ─── */}
-          <button
-            onClick={() => {
-              const isManager = facility.managerId === user?.id;
-              if (isManager) {
-                setShowDisbandConfirm(true);
-                return;
-              }
-              const confirmMsg = 'Are you sure you want to leave the facility?';
-              if (confirm(confirmMsg)) {
-                const result = leaveFacility(user?.id || 'guest');
-                if (result.success) {
-                  if (isCoop && wsRef.current) {
-                    sendAction('leaveDepartmentRoom', {});
-                    disconnectWebSocket();
-                  }
-                  useGameStore.setState((state) => ({
-                    facility: {
-                      ...state.facility,
-                      isActive: false,
-                      name: '',
-                      managerId: null,
-                      departmentKey: null,
-                      currentDay: 1,
-                      energy: 0,
-                      maxEnergy: 100,
-                      members: [],
-                      deployedAbnos: [],
-                      deployedToday: [],
-                      unlockedResearch: [],
-                      completedMissions: [],
-                      missionProgress: {},
-                      log: [],
-                    },
-                  }));
-                  setIsCoop(false);
-                  setRoomId(null);
-                  setPlayers([]);
-                  setIsHost(false);
-                  setView('dashboard');
-                } else {
-                  alert(`❌ ${result.reason}`);
-                }
-              }
-            }}
-            className={`px-4 py-2 border rounded transition ${
-              facility.managerId === user?.id
-                ? 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900'
-                : 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900'
-            }`}
-          >
+          {/* Retry Day */}
+          {isManager && (
+            <button onClick={() => {
+              if (isCoop) sendAction('retryDay', {});
+              else { retryDay(user?.id || ''); addFacilityLog(`Day ${facility.currentDay} retried.`, 'warning'); alert('✅ Day retried.'); }
+            }} className="px-4 py-2 border border-amber-500/50 text-amber-400 rounded hover:bg-amber-500/20 transition">
+              🔄 Retry Day
+            </button>
+          )}
+
+          {/* Safe Room */}
+          {facility.safeRoomUnlocked && (
+            <button onClick={() => {
+              if (isCoop) sendAction('goToSafeRoom', {});
+              else goToSafeRoom(user?.id || '');
+            }} className="px-4 py-2 bg-green-500/20 border border-green-400 text-green-400 rounded hover:bg-green-400 hover:text-gray-900 transition">
+              🏠 Safe Room
+            </button>
+          )}
+
+          {/* Leave / Disband */}
+          <button onClick={() => {
+            if (facility.managerId === user?.id) { setShowDisbandConfirm(true); return; }
+            if (confirm('Are you sure you want to leave the facility?')) {
+              const result = leaveFacility(user?.id || 'guest');
+              if (result.success) {
+                if (isCoop) { sendAction('leaveDepartmentRoom', {}); disconnectWebSocket(); }
+                useGameStore.setState((state) => ({
+                  facility: { ...state.facility, isActive: false, name: '', managerId: null, departmentKey: null, currentDay: 1, energy: 0, maxEnergy: 100, members: [], deployedAbnos: [], deployedToday: [], unlockedResearch: [], completedMissions: [], missionProgress: {}, log: [], qliphothMeter: 0, qliphothMax: 5, meltdownActive: false, meltdownTarget: null, meltdownExpiresAt: null, ordeals: [], safeRoomUnlocked: false, panicCount: 0 }
+                }));
+                setIsCoop(false); setRoomId(null); setPlayers([]); setIsHost(false); setView('dashboard');
+              } else alert(`❌ ${result.reason}`);
+            }
+          }} className={`px-4 py-2 border rounded transition ${facility.managerId === user?.id ? 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900' : 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900'}`}>
             {facility.managerId === user?.id ? '💥 Disband Facility' : '🚪 Leave Facility'}
           </button>
 
-          {/* ─── EMERGENCY LEAVE ─── */}
-          <button
-            onClick={handleForceLeave}
-            disabled={isForceLeaving}
-            className="px-4 py-2 border border-red-500/30 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50 text-xs"
-          >
+          <button onClick={handleForceLeave} disabled={isForceLeaving} className="px-4 py-2 border border-red-500/30 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50 text-xs">
             {isForceLeaving ? 'Processing...' : '🚪 Emergency Leave'}
           </button>
         </div>
@@ -1224,24 +937,10 @@ export default function DepartmentView() {
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-gray-900 border border-red-500/30 p-6 rounded-lg max-w-md w-full">
               <h3 className="text-lg font-bold text-red-400">💥 Disband Facility?</h3>
-              <p className="text-sm text-gray-300 mt-2">
-                {isCoop
-                  ? 'This will disband the room and force all players to leave. Are you sure?'
-                  : 'This will permanently delete your facility and all progress. Are you sure?'}
-              </p>
+              <p className="text-sm text-gray-300 mt-2">{isCoop ? 'This will disband the room and force all players to leave.' : 'This will permanently delete your facility.'}</p>
               <div className="flex gap-3 mt-4">
-                <button
-                  onClick={() => setShowDisbandConfirm(false)}
-                  className="px-4 py-2 border border-gray-600 text-gray-400 rounded hover:bg-gray-700 transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={disbandRoom}
-                  className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition"
-                >
-                  Disband
-                </button>
+                <button onClick={() => setShowDisbandConfirm(false)} className="px-4 py-2 border border-gray-600 text-gray-400 rounded hover:bg-gray-700 transition">Cancel</button>
+                <button onClick={disbandRoom} className="px-4 py-2 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition">Disband</button>
               </div>
             </div>
           </div>
@@ -1274,99 +973,76 @@ export default function DepartmentView() {
                     </div>
                     <div className="flex gap-2 mt-2">
                       {isBreaching ? (
-                        <button
-                          onClick={() => {
-                            if (!selectedIdentityId) {
-                              alert('Please select an identity first.');
-                              return;
-                            }
-                            const stats = getAgentStats();
-                            if (!stats) {
-                              alert('Could not get agent stats.');
-                              return;
-                            }
-                            const abnoData = getAbnormalityById(abno.abnoId);
-                            if (!abnoData) return;
-                            const enemySkills = abnoData.combatPages?.map(p => ({
-                              name: p.name,
-                              power: p.basePower || p.min || 5,
-                              coins: p.coins || 1,
-                              damageType: p.damageType || 'Red',
-                              infusion: p.infusion || 'Slash',
-                            })) || [{ name: 'Strike', power: 5, coins: 1, damageType: 'Red', infusion: 'Slash' }];
-                            const enemy = {
-                              name: abnoData.name,
-                              hp: abnoData.hp || 100,
-                              maxHp: abnoData.hp || 100,
-                              atk: abnoData.atk || 10,
-                              def: abnoData.def || 5,
-                              damageType: 'Red',
-                              infusion: 'Slash',
-                              resistDamageType: 'Pale',
-                              resistInfusion: 'Pierce',
-                              skills: enemySkills,
-                              abnoId: abno.abnoId,
-                            };
-                            const player = {
-                              name: identities.find(i => i.id === selectedIdentityId)?.name || 'Agent',
-                              hp: stats.maxHp,
-                              maxHp: stats.maxHp,
-                              atk: stats.atk,
-                              def: stats.def,
-                              damageType: stats.damageType,
-                              infusion: stats.infusion,
-                              skills: stats.skills,
-                            };
-                            setCombatEnemy(enemy);
-                            setCombatPlayer(player);
-                            setPlayerHp(player.hp);
-                            setPlayerMaxHp(player.maxHp);
-                            setEnemyHp(enemy.hp);
-                            setEnemyMaxHp(enemy.maxHp);
-                            setCombatTurn('player');
-                            setSelectedSkillIndex(0);
-                            setClashData(null);
-                            setCombatLog(['⚔️ Breach combat started!']);
-                            setIsCombatFinished(false);
-                            setCombatInitiator(user?.id || null);
-                            setView('combat');
-                            if (isCoop && wsRef.current) {
-                              sendAction('startCombat', { enemy, player, abnoId: abno.abnoId, initiator: user?.id });
-                            }
-                          }}
-                          className="text-xs px-2 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition"
-                        >
-                          ⚔️ Suppress Breach (Global)
+                        <button onClick={() => {
+                          if (!selectedIdentityId) { alert('Select an identity first.'); return; }
+                          const stats = getAgentStats();
+                          if (!stats) { alert('Could not get agent stats.'); return; }
+                          const abnoData = getAbnormalityById(abno.abnoId);
+                          if (!abnoData) return;
+                          const enemySkills = abnoData.combatPages?.map(p => ({
+                            name: p.name,
+                            power: p.basePower || p.min || 5,
+                            coins: p.coins || 1,
+                            damageType: p.damageType || 'Red',
+                            infusion: p.infusion || 'Slash',
+                          })) || [{ name: 'Strike', power: 5, coins: 1, damageType: 'Red', infusion: 'Slash' }];
+                          const enemy = {
+                            name: abnoData.name,
+                            hp: abnoData.hp || 100,
+                            maxHp: abnoData.hp || 100,
+                            atk: abnoData.atk || 10,
+                            def: abnoData.def || 5,
+                            damageType: 'Red',
+                            infusion: 'Slash',
+                            resistDamageType: 'Pale',
+                            resistInfusion: 'Pierce',
+                            skills: enemySkills,
+                            abnoId: abno.abnoId,
+                          };
+                          const player = {
+                            name: identities.find(i => i.id === selectedIdentityId)?.name || 'Agent',
+                            hp: stats.maxHp,
+                            maxHp: stats.maxHp,
+                            atk: stats.atk,
+                            def: stats.def,
+                            damageType: stats.damageType,
+                            infusion: stats.infusion,
+                            skills: stats.skills,
+                          };
+                          setCombatEnemy(enemy);
+                          setCombatPlayer(player);
+                          setPlayerHp(player.hp);
+                          setPlayerMaxHp(player.maxHp);
+                          setEnemyHp(enemy.hp);
+                          setEnemyMaxHp(enemy.maxHp);
+                          setCombatTurn('player');
+                          setSelectedSkillIndex(0);
+                          setClashData(null);
+                          setCombatLog(['⚔️ Breach combat started!']);
+                          setIsCombatFinished(false);
+                          setCombatInitiator(user?.id || null);
+                          setOrdealId(null);
+                          setView('combat');
+                          if (isCoop) sendAction('startCombat', { enemy, player, abnoId: abno.abnoId });
+                        }} className="text-xs px-2 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900 transition">
+                          ⚔️ Suppress Breach
                         </button>
                       ) : (
-                        <button
-                          onClick={() => {
-                            setSelectedAbnoId(abno.abnoId);
-                            setView('work');
-                          }}
-                          className="text-xs px-2 py-1 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition"
-                        >
+                        <button onClick={() => { setSelectedAbnoId(abno.abnoId); setView('work'); }} className="text-xs px-2 py-1 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition">
                           🔨 Work
                         </button>
                       )}
                       {isManager && !isBreaching && (
-                        <button
-                          onClick={() => {
-                            if (isCoop) {
-                              sendAction('removeAbno', { abnoId: abno.abnoId });
-                            } else {
-                              const newAbnos = facility.deployedAbnos.filter((a: any) => a.abnoId !== abno.abnoId);
-                              useGameStore.setState((s) => ({
-                                facility: {
-                                  ...s.facility,
-                                  deployedAbnos: newAbnos,
-                                },
-                              }));
-                              addFacilityLog(`${getDisplayName(user)} removed ${abno.abnoName}`, 'info');
-                            }
-                          }}
-                          className="text-xs px-2 py-1 border border-gray-600 text-gray-400 rounded hover:border-red-400 hover:text-red-400 transition"
-                        >
+                        <button onClick={() => {
+                          if (isCoop) sendAction('removeAbno', { abnoId: abno.abnoId });
+                          else {
+                            const newAbnos = facility.deployedAbnos.filter((a: any) => a.abnoId !== abno.abnoId);
+                            useGameStore.setState((s) => ({
+                              facility: { ...s.facility, deployedAbnos: newAbnos },
+                            }));
+                            addFacilityLog(`${getDisplayName(user)} removed ${abno.abnoName}`, 'info');
+                          }
+                        }} className="text-xs px-2 py-1 border border-gray-600 text-gray-400 rounded hover:border-red-400 hover:text-red-400 transition">
                           Remove
                         </button>
                       )}
@@ -1384,7 +1060,7 @@ export default function DepartmentView() {
           <div className="max-h-40 overflow-y-auto space-y-1">
             {(facility.log || []).map((entry: any, i: number) => {
               const time = new Date(entry.timestamp).toLocaleTimeString();
-              const color = entry.type === 'success' ? 'text-green-400' : entry.type === 'danger' ? 'text-red-400' : entry.type === 'warning' ? 'text-amber-400' : 'text-gray-400';
+              const color = entry.type === 'success' ? 'text-green-400' : entry.type === 'danger' ? 'text-red-400' : entry.type === 'warning' ? 'text-amber-400' : entry.type === 'panic' ? 'text-purple-400' : entry.type === 'death' ? 'text-red-600' : entry.type === 'abno_breach' ? 'text-red-500 font-bold' : entry.type === 'abno_suppressed' ? 'text-green-500' : 'text-gray-400';
               return (
                 <div key={i} className={`text-xs ${color}`}>
                   <span className="text-gray-600">[{time}]</span> {entry.player}: {entry.message}
@@ -1670,7 +1346,7 @@ export default function DepartmentView() {
   // ─── Render: Research ─────────────────────────────────────────────
   const renderResearch = () => {
     const deptKey = facility.departmentKey;
-    const dept = DEPARTMENTS[deptKey as DepartmentId];
+    const dept = DEPARTMENTS.find(d => d.key === deptKey);
     const researches = dept?.research || [];
 
     return (
@@ -1715,7 +1391,7 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Missions ─────────────────────────────────────────────
+  // ─── Render: Missions ──────────────────────────────────────────────
   const renderMissions = () => {
     const missions = [
       { id: 'm1', name: 'First Work', description: 'Complete 1 successful work', progress: facility.missionProgress?.worksCompleted || 0, required: 1 },
@@ -1755,7 +1431,7 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Bullets ────────────────────────────────────────────────
+  // ─── Render: Bullets ───────────────────────────────────────────────
   const renderBullets = () => {
     if (!isManager) return null;
 
@@ -1839,7 +1515,7 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Memory ──────────────────────────────────────────────
+  // ─── Render: Memory ────────────────────────────────────────────────
   const renderMemory = () => {
     if (!isManager || !facility.memoryRepositoryAvailable) return null;
     return (
@@ -1890,9 +1566,7 @@ export default function DepartmentView() {
   // ─── Render: Combat ────────────────────────────────────────────────
   const renderCombat = () => {
     if (!combatPlayer || !combatEnemy) return null;
-
     const isInitiator = combatInitiator === user?.id;
-
     const HpBarCombat = ({ value, max, color = 'green', label }: any) => {
       const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
       const colorClass = color === 'green' ? 'bg-green-500' : color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-blue-500';
@@ -1905,11 +1579,10 @@ export default function DepartmentView() {
         </div>
       );
     };
-
     return (
       <div className="border border-cyan-500/30 bg-gray-900/80 p-4 rounded-lg space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold text-red-400">⚔️ BREACH SUPPRESSION</h3>
+          <h3 className="text-lg font-bold text-red-400">⚔️ COMBAT</h3>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-400">Initiator: {combatInitiator ? players.find(p => p.id === combatInitiator)?.name || combatInitiator : 'Unknown'}</span>
             <button
@@ -2019,13 +1692,19 @@ export default function DepartmentView() {
     );
   };
 
+  // ─── Helper: getAvailableAbnos ──────────────────────────────────────
+  const getAvailableAbnos = () => {
+    const deployedIds = facility.deployedAbnos.map((a: any) => a.abnoId);
+    return abnormalities.filter(ab => !deployedIds.includes(ab.id));
+  };
+
   // ─── Main Render ────────────────────────────────────────────────────
   return (
     <div className="p-4 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-cyan-400">
           {deptConfig?.icon} {deptConfig?.name || 'Facility'}
-          {isCoop && <span className="text-sm text-cyan-300 ml-2">🌐 Co‑op</span>}
+          {isCoop && <span className="text-sm text-cyan-300 ml-2">🌐 Co‑op {wsConnected ? '🔗' : '🔌'}</span>}
         </h1>
         <span className="text-sm text-gray-400">Manager: {facility.managerId === user?.id ? 'You' : facility.managerId}</span>
       </div>
