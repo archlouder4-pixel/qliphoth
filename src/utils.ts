@@ -1,5 +1,5 @@
 // src/utils.ts
-// Utility functions for the department system
+// Utility functions for the department system and reception/duel system
 
 import { PanicType } from './types';
 
@@ -30,7 +30,6 @@ export function calculateQliphothMax(day: number): number {
  * Determine if an ordeal should trigger based on day and work count
  */
 export function shouldTriggerOrdeal(day: number, workCount: number): boolean {
-  // Higher chance on higher days, and slightly based on work count
   const base = 0.02 + (day * 0.001);
   const workModifier = Math.min(0.03, workCount * 0.001);
   return Math.random() < (base + workModifier);
@@ -59,7 +58,6 @@ export function pickOrdealTier(day: number): 'Dawn' | 'Noon' | 'Dusk' | 'Midnigh
     if (r < 0.9) return 'Dawn';
     return 'Midnight';
   }
-  // Day 45+
   const r = Math.random();
   if (r < 0.2) return 'Dawn';
   if (r < 0.4) return 'Noon';
@@ -102,7 +100,7 @@ export function getPanicEffect(panicType: PanicType): string {
 }
 
 // ============================================================================
-// COMBAT
+// COMBAT (clash, rollCoin, damage type multipliers)
 // ============================================================================
 
 /**
@@ -179,7 +177,41 @@ export function getDeployCost(day: number, risk: string): number {
 }
 
 // ============================================================================
-// RESEARCH EFFECTS
+// RANK INFO (for reception/duel system)
+// ============================================================================
+
+export interface RankInfo {
+  name: string;
+  icon: string;
+  minScore: number;
+}
+
+const RANKS: RankInfo[] = [
+  { name: 'Manager', icon: '👔', minScore: 0 },
+  { name: 'Senior Manager', icon: '👔', minScore: 100 },
+  { name: 'Director', icon: '📋', minScore: 300 },
+  { name: 'Senior Director', icon: '📋', minScore: 600 },
+  { name: 'Executive', icon: '⭐', minScore: 1000 },
+  { name: 'Senior Executive', icon: '⭐', minScore: 1500 },
+  { name: 'President', icon: '👑', minScore: 2100 },
+  { name: 'CEO', icon: '👑', minScore: 2800 },
+];
+
+/**
+ * Get rank info based on score
+ */
+export function getRankInfo(score: number): RankInfo {
+  let best = RANKS[0];
+  for (const rank of RANKS) {
+    if (score >= rank.minScore) {
+      best = rank;
+    }
+  }
+  return best;
+}
+
+// ============================================================================
+// RESEARCH EFFECTS (apply research bonuses to facility)
 // ============================================================================
 
 /**
