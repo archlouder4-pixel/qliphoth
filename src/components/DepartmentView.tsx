@@ -1,13 +1,16 @@
 // src/components/DepartmentView.tsx
 // Complete UI for department management with:
 // - Meltdown meter & timer
-// - Active ordeals list
+// - Active ordeals list with individual enemy buttons
+// - Greatest Ordeal Time display
+// - Pending Ordeal warning
 // - Safe room & retry day buttons
 // - Facility logs with detailed types
 // - Panic indicators
 // - WebSocket sync for co-op
 // - Research auto-unlock when all department missions complete
-// - Per-department missions with pagination (fixed useState error)
+// - Per-department missions with pagination
+
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -431,6 +434,9 @@ export default function DepartmentView() {
           ordeals: [],
           safeRoomUnlocked: false,
           panicCount: 0,
+          greatestOrdealTime: null,
+          ordealsTriggeredToday: [],
+          pendingOrdeal: null,
         },
       }));
       alert('✅ Emergency reset complete.');
@@ -514,6 +520,9 @@ export default function DepartmentView() {
         ordeals: [],
         safeRoomUnlocked: false,
         panicCount: 0,
+        greatestOrdealTime: null,
+        ordealsTriggeredToday: [],
+        pendingOrdeal: null,
       },
     }));
     setIsCoop(false);
@@ -805,6 +814,10 @@ export default function DepartmentView() {
       name: identities.find(i => i.id === o.identityId)?.name || o.identityId,
       portrait: identities.find(i => i.id === o.identityId)?.portrait || '👤',
     }));
+
+    // Helper to get the full ordeal definition for a pending ordeal
+    const pendingOrdealDef = facility.pendingOrdeal;
+
     return (
       <div className="space-y-4">
         {/* Stats Grid */}
@@ -828,6 +841,7 @@ export default function DepartmentView() {
             {isCoop && <p className="text-xs text-cyan-400">🌐 Co‑op</p>}
           </div>
         </div>
+
         {/* Identity Selection */}
         <div className="border border-cyan-500/20 bg-cyan-500/5 p-3 rounded">
           <p className="text-xs text-gray-400 mb-1">Select an identity for work & combat:</p>
@@ -856,6 +870,22 @@ export default function DepartmentView() {
             </div>
           )}
         </div>
+
+        {/* Greatest Ordeal Time */}
+        {facility.greatestOrdealTime && (
+          <div className="border border-cyan-500/20 bg-cyan-500/5 p-2 rounded text-xs text-gray-300">
+            <span className="text-gray-400">Greatest Ordeal Time this day: </span>
+            <span className="text-amber-400 font-bold">{facility.greatestOrdealTime}</span>
+          </div>
+        )}
+
+        {/* Pending Ordeal warning */}
+        {pendingOrdealDef && (
+          <div className="border border-red-500/30 bg-red-500/10 p-2 rounded text-xs text-red-400 animate-pulse">
+            ⚠️ Next Meltdown will be replaced with an Ordeal: {pendingOrdealDef.tier} {pendingOrdealDef.enemyType}
+          </div>
+        )}
+
         {/* Boost Active */}
         {boostActive && (
           <div className="border border-green-500/30 bg-green-500/10 p-3 rounded flex items-center gap-2">
@@ -866,6 +896,7 @@ export default function DepartmentView() {
             </div>
           </div>
         )}
+
         {/* Meltdown Display */}
         <div className="border border-amber-500/30 bg-amber-500/10 p-3 rounded">
           <div className="flex items-center justify-between">
@@ -890,51 +921,83 @@ export default function DepartmentView() {
             )}
           </div>
         </div>
-        {/* Active Ordeals (new system) */}
+
+        {/* ─── ACTIVE ORDEALS ────────────────────────────────────── */}
         {facility.ordeals && facility.ordeals.filter(o => !o.resolved).length > 0 && (
           <div className="border border-red-500/30 bg-red-500/10 p-3 rounded">
             <p className="text-red-400 font-bold">🌪️ Active Ordeals</p>
-            {facility.ordeals.filter(o => !o.resolved).map(ordeal => (
-              <div key={ordeal.id} className="flex items-center justify-between border-b border-gray-700 py-1">
-                <span className="text-white">{ordeal.tier} {ordeal.enemyType} – {ordeal.enemies.length} enemies</span>
-                <button onClick={() => {
-                  const enemy = ordeal.enemies[0];
-                  if (!enemy) return;
-                  const playerStats = getAgentStats();
-                  if (!playerStats) { alert('Select an identity first.'); return; }
-                  const player = {
-                    name: identities.find(i => i.id === selectedIdentityId)?.name || 'Agent',
-                    hp: playerStats.maxHp,
-                    maxHp: playerStats.maxHp,
-                    atk: playerStats.atk,
-                    def: playerStats.def,
-                    damageType: playerStats.damageType,
-                    infusion: playerStats.infusion,
-                    skills: playerStats.skills,
-                  };
-                  setCombatEnemy(enemy);
-                  setCombatPlayer(player);
-                  setPlayerHp(player.hp);
-                  setPlayerMaxHp(player.maxHp);
-                  setEnemyHp(enemy.hp);
-                  setEnemyMaxHp(enemy.maxHp);
-                  setCombatTurn('player');
-                  setSelectedSkillIndex(0);
-                  setClashData(null);
-                  setCombatLog([`⚔️ Fighting ${enemy.name} (Ordeal)`]);
-                  setIsCombatFinished(false);
-                  setCombatInitiator(user?.id || null);
-                  setOrdealId(ordeal.id);
-                  setView('combat');
-                  if (isCoop) sendAction('startOrdealCombat', { ordealId: ordeal.id, enemyIndex: 0 });
-                }} className="px-3 py-1 bg-red-500/20 border border-red-400 text-red-400 rounded hover:bg-red-400 hover:text-gray-900">
-                  Fight
-                </button>
-              </div>
-            ))}
+            {facility.ordeals.filter(o => !o.resolved).map(ordeal => {
+              const undefeated = ordeal.enemies.filter(e => e.hp > 0);
+              const total = ordeal.enemies.length;
+              const defeated = total - undefeated.length;
+              return (
+                <div key={ordeal.id} className="border-b border-gray-700 py-2 last:border-0">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-white font-bold">{ordeal.tier} {ordeal.enemyType}</span>
+                      <span className="text-xs text-gray-400 ml-2">({defeated}/{total} defeated)</span>
+                    </div>
+                    <span className="text-xs text-amber-400">+{ordeal.rewardEnergy}⚡ on victory</span>
+                  </div>
+                  {/* Enemy list */}
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {ordeal.enemies.map((enemy, idx) => {
+                      const isDefeated = enemy.hp <= 0;
+                      return (
+                        <button
+                          key={enemy.id}
+                          onClick={() => {
+                            if (isDefeated) {
+                              alert('This enemy is already defeated.');
+                              return;
+                            }
+                            const playerStats = getAgentStats();
+                            if (!playerStats) { alert('Select an identity first.'); return; }
+                            const player = {
+                              name: identities.find(i => i.id === selectedIdentityId)?.name || 'Agent',
+                              hp: playerStats.maxHp,
+                              maxHp: playerStats.maxHp,
+                              atk: playerStats.atk,
+                              def: playerStats.def,
+                              damageType: playerStats.damageType,
+                              infusion: playerStats.infusion,
+                              skills: playerStats.skills,
+                            };
+                            setCombatEnemy(enemy);
+                            setCombatPlayer(player);
+                            setPlayerHp(player.hp);
+                            setPlayerMaxHp(player.maxHp);
+                            setEnemyHp(enemy.hp);
+                            setEnemyMaxHp(enemy.maxHp);
+                            setCombatTurn('player');
+                            setSelectedSkillIndex(0);
+                            setClashData(null);
+                            setCombatLog([`⚔️ Fighting ${enemy.name} (Ordeal)`]);
+                            setIsCombatFinished(false);
+                            setCombatInitiator(user?.id || null);
+                            setOrdealId(ordeal.id);
+                            setView('combat');
+                            if (isCoop) sendAction('startOrdealCombat', { ordealId: ordeal.id, enemyIndex: idx });
+                          }}
+                          disabled={isDefeated}
+                          className={`text-xs px-2 py-0.5 rounded border transition ${
+                            isDefeated
+                              ? 'border-green-500/30 bg-green-500/10 text-green-400 cursor-default'
+                              : 'border-red-500/50 text-red-400 hover:bg-red-500/20'
+                          }`}
+                        >
+                          {isDefeated ? '✅' : '⚔️'} {enemy.name} {isDefeated ? '(Defeated)' : `(HP: ${enemy.hp}/${enemy.maxHp})`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
-        {/* Active Ordeal (old system from game) */}
+
+        {/* Active Ordeal (legacy) */}
         {facility.activeOrdeal && (
           <div className="border border-red-500/30 bg-red-500/10 p-3 rounded">
             <p className="text-red-400 font-bold">⚠️ ORDEAL IN PROGRESS</p>
@@ -955,6 +1018,7 @@ export default function DepartmentView() {
             </div>
           </div>
         )}
+
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-2">
           <button onClick={() => setView('deploy')} className="px-4 py-2 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition">
@@ -986,6 +1050,7 @@ export default function DepartmentView() {
           }} className={`px-4 py-2 border rounded transition ${canAdvance ? 'border-amber-400 text-amber-400 hover:bg-amber-400 hover:text-gray-900' : 'border-gray-600 text-gray-500 cursor-not-allowed'}`}>
             ➡️ Advance Day ({requiredEnergy}⚡)
           </button>
+
           {/* Retry Day */}
           {isManager && (
             <button onClick={() => {
@@ -995,6 +1060,7 @@ export default function DepartmentView() {
               🔄 Retry Day
             </button>
           )}
+
           {/* Safe Room */}
           {facility.safeRoomUnlocked && (
             <button onClick={() => {
@@ -1004,6 +1070,7 @@ export default function DepartmentView() {
               🏠 Safe Room
             </button>
           )}
+
           {/* Leave / Disband */}
           <button onClick={() => {
             if (facility.managerId === user?.id) { setShowDisbandConfirm(true); return; }
@@ -1012,7 +1079,7 @@ export default function DepartmentView() {
               if (result.success) {
                 if (isCoop) { sendAction('leaveDepartmentRoom', {}); disconnectWebSocket(); }
                 useGameStore.setState((state) => ({
-                  facility: { ...state.facility, isActive: false, name: '', managerId: null, departmentKey: null, currentDay: 1, energy: 0, maxEnergy: 100, members: [], deployedAbnos: [], deployedToday: [], unlockedResearch: [], completedMissions: [], missionProgress: {}, log: [], qliphothMeter: 0, qliphothMax: 5, meltdownActive: false, meltdownTarget: null, meltdownExpiresAt: null, ordeals: [], safeRoomUnlocked: false, panicCount: 0 }
+                  facility: { ...state.facility, isActive: false, name: '', managerId: null, departmentKey: null, currentDay: 1, energy: 0, maxEnergy: 100, members: [], deployedAbnos: [], deployedToday: [], unlockedResearch: [], completedMissions: [], missionProgress: {}, log: [], qliphothMeter: 0, qliphothMax: 5, meltdownActive: false, meltdownTarget: null, meltdownExpiresAt: null, ordeals: [], safeRoomUnlocked: false, panicCount: 0, greatestOrdealTime: null, ordealsTriggeredToday: [], pendingOrdeal: null }
                 }));
                 setIsCoop(false); setRoomId(null); setPlayers([]); setIsHost(false); setView('dashboard');
               } else alert(`❌ ${result.reason}`);
@@ -1020,10 +1087,12 @@ export default function DepartmentView() {
           }} className={`px-4 py-2 border rounded transition ${facility.managerId === user?.id ? 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900' : 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900'}`}>
             {facility.managerId === user?.id ? '💥 Disband Facility' : '🚪 Leave Facility'}
           </button>
+
           <button onClick={handleForceLeave} disabled={isForceLeaving} className="px-4 py-2 border border-red-500/30 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50 text-xs">
             {isForceLeaving ? 'Processing...' : '🚪 Emergency Leave'}
           </button>
         </div>
+
         {/* Disband Confirmation Overlay */}
         {showDisbandConfirm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -1037,6 +1106,7 @@ export default function DepartmentView() {
             </div>
           </div>
         )}
+
         {/* Deployed Abnormalities */}
         <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
           <h3 className="text-sm font-bold text-white mb-2">📋 Deployed Abnormalities</h3>
@@ -1144,6 +1214,7 @@ export default function DepartmentView() {
             </div>
           )}
         </div>
+
         {/* Facility Log */}
         <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
           <h3 className="text-sm font-bold text-white mb-2">📜 Facility Log</h3>
@@ -1384,8 +1455,6 @@ export default function DepartmentView() {
             );
           })}
         </div>
-        {/* FIX: was `workResult.success` (always true), now uses `workResult.isSuccess`,
-            the actual outcome flag also used by the facility log above. */}
         {workResult && (
           <div className={`mt-4 p-4 border-2 rounded-lg shadow-lg transition-all duration-500 ${
             workResult.isSuccess
@@ -1419,12 +1488,11 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Research (with auto-unlock when missions complete) ──
+  // ─── Render: Research ──────────────────────────────────────────────
   const renderResearch = () => {
     const deptKey = facility.departmentKey;
     const dept = DEPARTMENTS.find(d => d.key === deptKey);
     const researches = dept?.research || [];
-    // ── Check if all missions for this department are completed ──
     const deptMissions = SUPPRESSION_MISSIONS[deptKey || '']?.missions || [];
     const allMissionsDone = deptMissions.every(m => facility.completedMissions.includes(m.id));
     return (
@@ -1440,7 +1508,6 @@ export default function DepartmentView() {
         )}
         <div className="space-y-2">
           {researches.map(r => {
-            // Unlocked if either explicitly unlocked OR all missions done
             const unlocked = facility.unlockedResearch.includes(r.id) || allMissionsDone;
             return (
               <div key={r.id} className="border border-gray-700 bg-gray-800/30 p-3 rounded flex items-center justify-between">
@@ -1479,7 +1546,7 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Missions (per‑department with pagination) ────────────
+  // ─── Render: Missions ──────────────────────────────────────────────
   const renderMissions = () => {
     const allDeptKeys = Object.keys(SUPPRESSION_MISSIONS);
     const deptMissions = SUPPRESSION_MISSIONS[selectedDept]?.missions || [];
@@ -1493,7 +1560,6 @@ export default function DepartmentView() {
           <h3 className="text-lg font-bold text-amber-400">📜 Missions</h3>
           <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
-        {/* Department filter */}
         <div className="mb-4 flex flex-wrap gap-2">
           {allDeptKeys.map(key => {
             const dept = DEPARTMENTS.find(d => d.key === key);
@@ -1512,7 +1578,6 @@ export default function DepartmentView() {
             );
           })}
         </div>
-        {/* Missions list */}
         <div className="space-y-2">
           {pageMissions.length === 0 ? (
             <p className="text-gray-400 text-sm">No missions for this department.</p>
@@ -1539,7 +1604,6 @@ export default function DepartmentView() {
             })
           )}
         </div>
-        {/* Pagination */}
         {deptMissions.length > 5 && (
           <div className="flex justify-between items-center mt-4">
             <button
@@ -1695,6 +1759,8 @@ export default function DepartmentView() {
   const renderCombat = () => {
     if (!combatPlayer || !combatEnemy) return null;
     const isInitiator = combatInitiator === user?.id;
+    const ordeal = ordealId ? facility.ordeals.find(o => o.id === ordealId) : null;
+
     const HpBarCombat = ({ value, max, color = 'green', label }: any) => {
       const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
       const colorClass = color === 'green' ? 'bg-green-500' : color === 'red' ? 'bg-red-500' : color === 'amber' ? 'bg-amber-500' : 'bg-blue-500';
@@ -1707,6 +1773,7 @@ export default function DepartmentView() {
         </div>
       );
     };
+
     return (
       <div className="border border-cyan-500/30 bg-gray-900/80 p-4 rounded-lg space-y-4">
         <div className="flex items-center justify-between">
@@ -1732,6 +1799,15 @@ export default function DepartmentView() {
             </button>
           </div>
         </div>
+
+        {ordeal && (
+          <div className="text-xs text-gray-400 border-b border-gray-700 pb-2">
+            <span>Ordeal: </span>
+            <span className="text-white font-bold">{ordeal.tier} {ordeal.enemyType}</span>
+            <span className="ml-2">– {ordeal.enemies.filter(e => e.hp > 0).length} enemies remaining</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-4">
           <div className="border border-gray-700 p-3 rounded">
             <p className="text-sm font-bold text-green-400">{combatPlayer.name} (You)</p>
@@ -1750,6 +1826,7 @@ export default function DepartmentView() {
             </div>
           </div>
         </div>
+
         {clashData && (
           <div className={`border p-3 rounded ${clashData.won ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
             <p className="text-center font-bold">{clashData.won ? '✅ CLASH WON!' : '❌ CLASH LOST!'}</p>
@@ -1758,6 +1835,7 @@ export default function DepartmentView() {
             </p>
           </div>
         )}
+
         {!isCombatFinished && combatTurn === 'player' && isInitiator && (
           <div>
             <p className="text-xs font-mono font-bold text-gray-400 mb-2">SELECT SKILL</p>
@@ -1784,6 +1862,7 @@ export default function DepartmentView() {
             </button>
           </div>
         )}
+
         {!isCombatFinished && combatTurn === 'resolve' && isInitiator && (
           <button
             onClick={resolveCombat}
@@ -1792,9 +1871,11 @@ export default function DepartmentView() {
             ⏳ RESOLVE
           </button>
         )}
+
         {!isInitiator && !isCombatFinished && (
           <div className="text-center text-gray-400 py-4">⏳ Waiting for {combatInitiator ? players.find(p => p.id === combatInitiator)?.name : 'the initiator'} to act...</div>
         )}
+
         {isCombatFinished && (
           <button
             onClick={() => setView('dashboard')}
@@ -1803,6 +1884,7 @@ export default function DepartmentView() {
             ↩️ BACK TO FACILITY
           </button>
         )}
+
         <div className="border border-gray-700 bg-gray-900/50 p-2 rounded max-h-32 overflow-y-auto">
           <p className="text-xs font-mono font-bold text-gray-400 mb-1">⚔️ COMBAT LOG</p>
           {combatLog.map((line, i) => (
@@ -1829,6 +1911,7 @@ export default function DepartmentView() {
         </h1>
         <span className="text-sm text-gray-400">Manager: {facility.managerId === user?.id ? 'You' : facility.managerId}</span>
       </div>
+
       {view === 'combat' ? renderCombat() : (
         <>
           {view === 'dashboard' && renderDashboard()}
