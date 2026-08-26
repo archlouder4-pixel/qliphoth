@@ -1,41 +1,59 @@
+// src/types.ts
+// Complete type definitions for the department system
+
+// ============================================================================
+// DEPARTMENT IDS
+// ============================================================================
+
+export type DepartmentId =
+  | 'MALKUTH'
+  | 'YESOD'
+  | 'NETZACH'
+  | 'HOD'
+  | 'TIPHERETH'
+  | 'GEBURA'
+  | 'CHESED'
+  | 'BINAH'
+  | 'HOKMA'
+  | 'DAAT'
+  | 'KETER';
+
+export type PanicType = 'fortitude' | 'prudence' | 'temperance' | 'justice';
+
+// ============================================================================
+// PLAYER
+// ============================================================================
+
 export interface Player {
   id: string;
   name: string;
   isHost: boolean;
   identityId?: string;
-  score?: number;
-  lives?: number;
-  wins?: number;
-  losses?: number;
+  // Panic tracking
+  highestStat?: PanicType;
+  isPanic: boolean;
+  panicTimer?: NodeJS.Timeout | null;
+  inSafeRoom: boolean;
+  // Agent stats (for combat & work)
+  stats?: {
+    fortitude: number;
+    prudence: number;
+    temperance: number;
+    justice: number;
+    hp: number;
+    maxHp: number;
+    sp: number;
+    maxSp: number;
+    atk: number;
+    def: number;
+    spd: number;
+    workSuccess: number;
+  };
 }
 
-export interface FacilityState {
-  isActive: boolean;
-  name: string;
-  managerId: string | null;
-  departmentKey: string | null;
-  currentDay: number;
-  energy: number;
-  maxEnergy: number;
-  totalEnergy: number;
-  members: string[];
-  deployedAbnos: DeployedAbno[];
-  deployedToday: string[];
-  unlockedResearch: string[];
-  completedMissions: string[];
-  missionProgress: Record<string, any>;
-  completedCoreSuppressions: string[];
-  suppressionRewards: any[];
-  ordealsCompleted: number;
-  activeOrdeal: any | null;
-  activeBoost: any | null;
-  qliphothOverload: Record<string, any>;
-  qliphothLevel: number;
-  bullets: Record<string, number>;
-  bulletCapacityMultiplier: number;
-  memoryRepositoryAvailable: boolean;
-  log: FacilityLogEntry[];
-}
+// ============================================================================
+// DEPLOYED ABNORMALITY
+// ============================================================================
 
 export interface DeployedAbno {
   abnoId: string;
@@ -43,154 +61,221 @@ export interface DeployedAbno {
   risk: string;
   qliphothCounter: number;
   maxCounter: number;
+  // working stats
+  workCount: number;
+  lastWorkResult?: 'success' | 'fail';
 }
+
+// ============================================================================
+// FACILITY LOG ENTRY
+// ============================================================================
+
+export type LogType =
+  | 'info'
+  | 'success'
+  | 'warning'
+  | 'danger'
+  | 'panic'
+  | 'death'
+  | 'abno_breach'
+  | 'abno_suppressed'
+  | 'event'
+  | 'event_suppressed'
+  | 'ego_gift'
+  | 'work_start'
+  | 'work_end';
 
 export interface FacilityLogEntry {
   timestamp: number;
   message: string;
-  type: 'info' | 'success' | 'warning' | 'danger';
+  type: LogType;
   player: string;
 }
 
+// ============================================================================
+// ORDEALS
+// ============================================================================
+
+export interface OrdealEnemy {
+  id: string;
+  name: string;
+  hp: number;
+  maxHp: number;
+  atk: number;
+  def: number;
+  resistDamageType: string;
+  resistInfusion: string;
+  skills: Array<{
+    name: string;
+    power: number;
+    coins: number;
+    damageType: string;
+    infusion: string;
+  }>;
+}
+
+export interface OrdealInstance {
+  id: string;
+  definitionId: string;
+  tier: 'Dawn' | 'Noon' | 'Dusk' | 'Midnight';
+  enemyType: string;
+  enemies: OrdealEnemy[];
+  startTime: number;
+  resolved: boolean;
+  victory: boolean | null;
+  rewardEnergy: number;
+}
+
+// ============================================================================
+// COMBAT STATE
+// ============================================================================
+
 export interface CombatState {
-  enemy: any;
-  player: any;
+  enemy: any; // enemy entity (abnormality or ordeal)
+  player: any; // player entity (agent stats)
   playerHp: number;
   playerMaxHp: number;
   enemyHp: number;
   enemyMaxHp: number;
   turn: 'player' | 'resolve' | 'enemy';
-  clashData: { p: number; e: number; won: boolean; dmg: number; actorName: string } | null;
+  clashData: {
+    p: number;
+    e: number;
+    won: boolean;
+    dmg: number;
+    actorName: string;
+  } | null;
   log: string[];
   isFinished: boolean;
-  initiator: string | null;
-  abnoId: string;
+  initiator: string | null; // playerId
+  abnoId: string | null;
+  ordealId?: string; // if fighting an ordeal
 }
 
+// ============================================================================
+// DEPARTMENT ROOM STATE (full state)
+// ============================================================================
+
 export interface DepartmentRoomState {
+  // ── Core ──
   players: Player[];
-  facility: FacilityState;
+  facility: {
+    // ── Basic ──
+    isActive: boolean;
+    name: string;
+    managerId: string | null;
+    departmentKey: DepartmentId | null;
+    currentDay: number;
+    energy: number;
+    maxEnergy: number;
+    totalEnergy: number;
+    members: string[];
+    deployedAbnos: DeployedAbno[];
+    deployedToday: string[];
+    maxDeployPerDay: number;
+
+    // ── Research & Missions ──
+    unlockedResearch: string[];
+    completedMissions: string[];
+    missionProgress: {
+      worksCompleted: number;
+      totalDeployments?: number;
+    };
+    completedCoreSuppressions: string[];
+    suppressionRewards: string[];
+
+    // ── Ordeals ──
+    ordealsCompleted: number;
+    activeOrdeal: { name: string; id: string } | null;
+
+    // ── Boost ──
+    activeBoost: { expiresAt: number } | null;
+
+    // ── Qliphoth & Meltdown ──
+    qliphothOverload: Record<string, { workCount: number }>;
+    qliphothLevel: number;
+    qliphothMeter: number;
+    qliphothMax: number;
+    meltdownActive: boolean;
+    meltdownTarget: string | null; // abnoId
+    meltdownExpiresAt: number | null;
+
+    // ── Bullets ──
+    bullets: {
+      red: number;
+      white: number;
+      black: number;
+      pale: number;
+      hp: number;
+      sp: number;
+      adrenaline: number;
+      execution: number;
+    };
+    bulletCapacityMultiplier: number;
+
+    // ── Memory Repository ──
+    memoryRepositoryAvailable: boolean;
+
+    // ── Lunacy ──
+    lunacy: number;
+
+    // ── Log ──
+    log: FacilityLogEntry[];
+
+    // ── Safe Room ──
+    safeRoomUnlocked: boolean;
+    panicCount: number; // total panic events this day
+
+    // ── Ordeals list ──
+    ordeals: OrdealInstance[];
+  };
+
+  // ── Combat ──
   combat: CombatState | null;
+
+  // ── Host & Room ──
   hostId: string | null;
   roomId: string;
 }
 
-export interface ReceptionPlayerData {
-  identityId: string;
-  weaponId: string | null;
-  giftIds: string[];
+// ============================================================================
+// WEB SOCKET MESSAGES
+// ============================================================================
+
+export interface WebSocketMessage {
+  type: string;
+  payload?: any;
+}
+
+export interface JoinPayload {
+  playerId: string;
   playerName: string;
-  stats: {
-    hp: number;
-    maxHp: number;
-    atk: number;
-    def: number;
-    spd: number;
-    sp: number;
-    shield: number;
-    score: number;
-    lives: number;
-    ultimateBar: number;
-    transformationActive: boolean;
-    transformationTurnsLeft: number;
-  };
-  skills: any[];
-  classCategory: string;
-  classEffect: number;
-  hasUltimate: boolean;
-  transformationTrigger: string;
-  ultimateDuration: number;
-  transformationPassive: any;
-  baseSkills: any[];
-  transformedSkills: any[];
+  identityId?: string;
+  departmentKey?: DepartmentId;
 }
 
-export interface ReceptionRoomState {
-  p1: ReceptionPlayerData & { userId: string };
-  p2: ReceptionPlayerData & { userId: string };
-  turn: 'p1' | 'p2';
-  phase: 'p1Select' | 'p2Select' | 'clash' | 'result';
-  p1SkillIdx: number | null;
-  p2SkillIdx: number | null;
-  clashResult: any;
-  winner: 'p1' | 'p2' | null;
-  scoreChanges: { p1: number; p2: number };
-  lifeChanges: { p1: number; p2: number };
-  newRanks: { p1: string; p2: string };
+export interface WorkPayload {
+  abnoId: string;
+  workType: string;
+  workSuccess: number;
 }
 
-export interface CompetitiveRoomState {
-  players: Player[];
-  hostId: string | null;
-  currentWeek: number;
-  zoneScores: Record<string, number>;
-  completedZones: string[];
-  merit: number;
-  reputation: number;
-  squad: string;
-  region: string;
-}
-
-export interface ExplorationEnemy {
-  id: string;
-  name: string;
-  portrait: string;
-  element: string;
-  resist: string;
-  hp: number;
-  maxHp: number;
-  atk: number;
-  def: number;
-  spd: number;
-  damageType: string;
-  infusion: string;
-  resistDamageType: string;
-  resistInfusion: string;
-  skills: { name: string; power: number; coins: number; damageType?: string; infusion?: string }[];
-  isBoss: boolean;
-  bossMechanic?: any;
-}
-
-export interface ExplorationIdentityState {
-  identityId: string;
-  name: string;
-  playerName: string;
-  hp: number;
-  maxHp: number;
-  sp: number;
-  maxSp: number;
-  ultimate: number;
-  shield: number;
-  transformationActive: boolean;
-  transformationTurnsLeft: number;
-  transformedSkills: any[];
-  resolveStacks: number;
-  witherStacks: number;
-  bleedStacks: number;
-  atk: number;
-  def: number;
-  spd: number;
-  damageType: string;
-  infusion: string;
-  classCategory: string;
-  classEffect: number;
-  skills: any[];
-  isActive: boolean;
-  attackerBuffTurns: number;
-}
-
-export interface ExplorationRoomState {
-  placeId: string;
-  difficulty: string;
-  identityStates: ExplorationIdentityState[];
-  enemies: ExplorationEnemy[];
-  turn: 'player' | 'enemy' | 'resolve' | 'finished';
-  activeIdentityIndex: number;
+export interface CombatActionPayload {
+  playerHp: number;
+  enemyHp: number;
   clashData: any;
-  log: string[];
-  phase: 'lobby' | 'exploring' | 'waveClear' | 'victory' | 'defeat';
-  currentWaveIndex: number;
-  totalEnemiesDefeated: number;
-  bossesDefeated: number;
-  finalScore: number | null;
+  turn: string;
+  log: string;
+}
+
+export interface CombatFinishPayload {
+  abnoId: string;
+  won: boolean;
+  initiator: string;
+  enemyName: string;
+}
+
+export interface ResolveOrdealPayload {
+  id: string;
+  victory: boolean;
 }
