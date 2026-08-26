@@ -8,7 +8,6 @@
 // - WebSocket sync for co-op
 // - Research auto-unlock when all department missions complete
 // - Per-department missions with pagination (fixed useState error)
-
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
 import { useAuth } from '../auth/AuthContext';
@@ -447,7 +446,6 @@ export default function DepartmentView() {
   const connectWebSocket = (roomId: string) => {
     connectToRoom(roomId);
   };
-
   const disconnectWebSocket = () => {
     disconnectFromRoom();
   };
@@ -802,13 +800,11 @@ export default function DepartmentView() {
     const boost = facility.activeBoost;
     const boostRemaining = boost ? Math.floor((boost.expiresAt - Date.now()) / 1000) : 0;
     const boostActive = boost && boostRemaining > 0;
-
     const identityOptions = ownedIdentities.map(o => ({
       id: o.identityId,
       name: identities.find(i => i.id === o.identityId)?.name || o.identityId,
       portrait: identities.find(i => i.id === o.identityId)?.portrait || '👤',
     }));
-
     return (
       <div className="space-y-4">
         {/* Stats Grid */}
@@ -832,7 +828,6 @@ export default function DepartmentView() {
             {isCoop && <p className="text-xs text-cyan-400">🌐 Co‑op</p>}
           </div>
         </div>
-
         {/* Identity Selection */}
         <div className="border border-cyan-500/20 bg-cyan-500/5 p-3 rounded">
           <p className="text-xs text-gray-400 mb-1">Select an identity for work & combat:</p>
@@ -861,7 +856,6 @@ export default function DepartmentView() {
             </div>
           )}
         </div>
-
         {/* Boost Active */}
         {boostActive && (
           <div className="border border-green-500/30 bg-green-500/10 p-3 rounded flex items-center gap-2">
@@ -872,7 +866,6 @@ export default function DepartmentView() {
             </div>
           </div>
         )}
-
         {/* Meltdown Display */}
         <div className="border border-amber-500/30 bg-amber-500/10 p-3 rounded">
           <div className="flex items-center justify-between">
@@ -897,7 +890,6 @@ export default function DepartmentView() {
             )}
           </div>
         </div>
-
         {/* Active Ordeals (new system) */}
         {facility.ordeals && facility.ordeals.filter(o => !o.resolved).length > 0 && (
           <div className="border border-red-500/30 bg-red-500/10 p-3 rounded">
@@ -942,7 +934,6 @@ export default function DepartmentView() {
             ))}
           </div>
         )}
-
         {/* Active Ordeal (old system from game) */}
         {facility.activeOrdeal && (
           <div className="border border-red-500/30 bg-red-500/10 p-3 rounded">
@@ -964,7 +955,6 @@ export default function DepartmentView() {
             </div>
           </div>
         )}
-
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-2">
           <button onClick={() => setView('deploy')} className="px-4 py-2 bg-cyan-500/20 border border-cyan-400 text-cyan-400 rounded hover:bg-cyan-400 hover:text-gray-900 transition">
@@ -996,7 +986,6 @@ export default function DepartmentView() {
           }} className={`px-4 py-2 border rounded transition ${canAdvance ? 'border-amber-400 text-amber-400 hover:bg-amber-400 hover:text-gray-900' : 'border-gray-600 text-gray-500 cursor-not-allowed'}`}>
             ➡️ Advance Day ({requiredEnergy}⚡)
           </button>
-
           {/* Retry Day */}
           {isManager && (
             <button onClick={() => {
@@ -1006,7 +995,6 @@ export default function DepartmentView() {
               🔄 Retry Day
             </button>
           )}
-
           {/* Safe Room */}
           {facility.safeRoomUnlocked && (
             <button onClick={() => {
@@ -1016,7 +1004,6 @@ export default function DepartmentView() {
               🏠 Safe Room
             </button>
           )}
-
           {/* Leave / Disband */}
           <button onClick={() => {
             if (facility.managerId === user?.id) { setShowDisbandConfirm(true); return; }
@@ -1033,12 +1020,10 @@ export default function DepartmentView() {
           }} className={`px-4 py-2 border rounded transition ${facility.managerId === user?.id ? 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900' : 'border-red-400 text-red-400 hover:bg-red-400 hover:text-gray-900'}`}>
             {facility.managerId === user?.id ? '💥 Disband Facility' : '🚪 Leave Facility'}
           </button>
-
           <button onClick={handleForceLeave} disabled={isForceLeaving} className="px-4 py-2 border border-red-500/30 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50 text-xs">
             {isForceLeaving ? 'Processing...' : '🚪 Emergency Leave'}
           </button>
         </div>
-
         {/* Disband Confirmation Overlay */}
         {showDisbandConfirm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -1052,7 +1037,6 @@ export default function DepartmentView() {
             </div>
           </div>
         )}
-
         {/* Deployed Abnormalities */}
         <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
           <h3 className="text-sm font-bold text-white mb-2">📋 Deployed Abnormalities</h3>
@@ -1160,7 +1144,6 @@ export default function DepartmentView() {
             </div>
           )}
         </div>
-
         {/* Facility Log */}
         <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
           <h3 className="text-sm font-bold text-white mb-2">📜 Facility Log</h3>
@@ -1185,9 +1168,7 @@ export default function DepartmentView() {
     const deployedToday = facility.deployedToday.length;
     const canDeploy = deployedToday < maxDeploy;
     const availableAbnos = getAvailableAbnos();
-
     const getCost = (risk: string) => getDeployCost(facility.currentDay, risk);
-
     return (
       <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
         <div className="flex items-center justify-between mb-4">
@@ -1206,7 +1187,6 @@ export default function DepartmentView() {
               const cost = getCost(abno.risk);
               const canAfford = facility.energy >= cost;
               const isFree = cost === 0;
-
               return (
                 <div key={abno.id} className="flex items-center justify-between border border-gray-700 bg-gray-800/50 p-2 rounded">
                   <div>
@@ -1274,13 +1254,10 @@ export default function DepartmentView() {
         </div>
       );
     }
-
     const selectedAbno = selectedAbnoId
       ? facility.deployedAbnos.find((a: any) => a.abnoId === selectedAbnoId)
       : null;
-
     const availableAbnos = facility.deployedAbnos.filter((a: any) => a.qliphothCounter > 0);
-
     if (availableAbnos.length === 0) {
       return (
         <div className="border border-gray-700 rounded p-4">
@@ -1289,7 +1266,6 @@ export default function DepartmentView() {
         </div>
       );
     }
-
     if (!selectedAbno) {
       return (
         <div className="border border-gray-700 rounded p-4">
@@ -1311,7 +1287,6 @@ export default function DepartmentView() {
         </div>
       );
     }
-
     const abnoData = getAbnormalityById(selectedAbno.abnoId);
     const baseChances = abnoData?.workChances || { instinct: 0.5, insight: 0.5, attachment: 0.5, repression: 0.5 };
     const modifiedChances = {
@@ -1320,10 +1295,8 @@ export default function DepartmentView() {
       attachment: Math.min(1, baseChances.attachment * agentStats.workSuccess),
       repression: Math.min(1, baseChances.repression * agentStats.workSuccess),
     };
-
     const identity = identities.find(i => i.id === selectedIdentityId);
     const identityPortrait = identity?.portrait || '👤';
-
     return (
       <div className="border border-gray-700 rounded p-4 bg-gray-800/30">
         <div className="flex items-center justify-between mb-4">
@@ -1332,7 +1305,6 @@ export default function DepartmentView() {
           </h3>
           <button onClick={() => { setSelectedAbnoId(null); }} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
-
         <div className="grid grid-cols-2 gap-3 mb-4 p-3 bg-gray-700/20 rounded">
           <div className="text-center">
             <p className="text-xs text-gray-400">Abnormality</p>
@@ -1345,7 +1317,6 @@ export default function DepartmentView() {
             <p className="text-sm text-gray-400">Work Bonus: +{Math.round((agentStats.workSuccess - 1) * 100)}%</p>
           </div>
         </div>
-
         <div className="mb-4 flex items-center justify-between p-2 bg-gray-800/30 rounded">
           <span className="text-sm text-gray-400">Qliphoth Counter</span>
           <div className="flex items-center gap-2">
@@ -1358,7 +1329,6 @@ export default function DepartmentView() {
             <span className="text-white font-mono">{selectedAbno.qliphothCounter}/{selectedAbno.maxCounter}</span>
           </div>
         </div>
-
         {workInProgress && !isCoop && (
           <div className="mb-4 p-4 border-2 border-cyan-500/50 bg-cyan-500/10 rounded-lg shadow-lg animate-pulse">
             <div className="flex items-center gap-4 mb-2">
@@ -1387,7 +1357,6 @@ export default function DepartmentView() {
             ⏳ Sending work request to server...
           </div>
         )}
-
         <div className="grid grid-cols-2 gap-3">
           {(['instinct', 'insight', 'attachment', 'repression'] as WorkType[]).map(type => {
             const chance = modifiedChances[type];
@@ -1415,18 +1384,19 @@ export default function DepartmentView() {
             );
           })}
         </div>
-
+        {/* FIX: was `workResult.success` (always true), now uses `workResult.isSuccess`,
+            the actual outcome flag also used by the facility log above. */}
         {workResult && (
           <div className={`mt-4 p-4 border-2 rounded-lg shadow-lg transition-all duration-500 ${
-            workResult.success
+            workResult.isSuccess
               ? 'border-green-500/50 bg-green-500/10 scale-100'
               : 'border-red-500/50 bg-red-500/10 scale-100'
           }`}>
             <div className="flex items-center gap-4">
-              <span className="text-4xl">{workResult.success ? '✅' : '❌'}</span>
+              <span className="text-4xl">{workResult.isSuccess ? '✅' : '❌'}</span>
               <div className="flex-1">
-                <p className={`text-xl font-bold ${workResult.success ? 'text-green-400' : 'text-red-400'}`}>
-                  {workResult.success ? 'GOOD' : 'BAD'} WORK RESULT
+                <p className={`text-xl font-bold ${workResult.isSuccess ? 'text-green-400' : 'text-red-400'}`}>
+                  {workResult.isSuccess ? 'GOOD' : 'BAD'} WORK RESULT
                 </p>
                 <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
                   <div>
@@ -1444,7 +1414,6 @@ export default function DepartmentView() {
             </div>
           </div>
         )}
-
         <button onClick={() => setView('dashboard')} className="mt-4 text-sm text-gray-400 hover:text-white">← Back</button>
       </div>
     );
@@ -1455,11 +1424,9 @@ export default function DepartmentView() {
     const deptKey = facility.departmentKey;
     const dept = DEPARTMENTS.find(d => d.key === deptKey);
     const researches = dept?.research || [];
-
     // ── Check if all missions for this department are completed ──
     const deptMissions = SUPPRESSION_MISSIONS[deptKey || '']?.missions || [];
     const allMissionsDone = deptMissions.every(m => facility.completedMissions.includes(m.id));
-
     return (
       <div className="border border-gray-700 rounded p-4">
         <div className="flex items-center justify-between mb-4">
@@ -1517,18 +1484,15 @@ export default function DepartmentView() {
     const allDeptKeys = Object.keys(SUPPRESSION_MISSIONS);
     const deptMissions = SUPPRESSION_MISSIONS[selectedDept]?.missions || [];
     const completed = facility.completedMissions || [];
-
     const totalPages = Math.ceil(deptMissions.length / 5);
     const start = missionPage * 5;
     const pageMissions = deptMissions.slice(start, start + 5);
-
     return (
       <div className="border border-gray-700 rounded p-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold text-amber-400">📜 Missions</h3>
           <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
-
         {/* Department filter */}
         <div className="mb-4 flex flex-wrap gap-2">
           {allDeptKeys.map(key => {
@@ -1548,7 +1512,6 @@ export default function DepartmentView() {
             );
           })}
         </div>
-
         {/* Missions list */}
         <div className="space-y-2">
           {pageMissions.length === 0 ? (
@@ -1576,7 +1539,6 @@ export default function DepartmentView() {
             })
           )}
         </div>
-
         {/* Pagination */}
         {deptMissions.length > 5 && (
           <div className="flex justify-between items-center mt-4">
@@ -1606,7 +1568,6 @@ export default function DepartmentView() {
   // ─── Render: Bullets ───────────────────────────────────────────────
   const renderBullets = () => {
     if (!isManager) return null;
-
     const bulletTypes = [
       { key: 'red', label: 'Red', emoji: '🔴' },
       { key: 'white', label: 'White', emoji: '⚪' },
@@ -1617,23 +1578,19 @@ export default function DepartmentView() {
       { key: 'adrenaline', label: 'Adrenaline', emoji: '⚡' },
       { key: 'execution', label: 'Execution', emoji: '🔫' },
     ];
-
     const capacity = Math.floor(10 * (facility.bulletCapacityMultiplier || 1));
     const costPerBatch = 10;
-
     return (
       <div className="border border-gray-700 rounded p-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold text-red-400">🔫 Bullets</h3>
           <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
-
         <div className="grid grid-cols-2 gap-2">
           {bulletTypes.map(b => {
             const count = facility.bullets?.[b.key] || 0;
             const atCapacity = count >= capacity;
             const canAfford = lunacy >= costPerBatch;
-
             return (
               <div key={b.key} className="border border-gray-700 bg-gray-800/30 p-2 rounded flex items-center justify-between">
                 <span className="text-white">{b.emoji} {b.label}</span>
@@ -1677,7 +1634,6 @@ export default function DepartmentView() {
             );
           })}
         </div>
-
         <div className="mt-4 flex justify-between text-xs text-gray-400">
           <span>Capacity: {capacity}</span>
           <span>Cost: {costPerBatch}🌟 per +10</span>
@@ -1776,7 +1732,6 @@ export default function DepartmentView() {
             </button>
           </div>
         </div>
-
         <div className="grid grid-cols-2 gap-4">
           <div className="border border-gray-700 p-3 rounded">
             <p className="text-sm font-bold text-green-400">{combatPlayer.name} (You)</p>
@@ -1795,7 +1750,6 @@ export default function DepartmentView() {
             </div>
           </div>
         </div>
-
         {clashData && (
           <div className={`border p-3 rounded ${clashData.won ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
             <p className="text-center font-bold">{clashData.won ? '✅ CLASH WON!' : '❌ CLASH LOST!'}</p>
@@ -1804,7 +1758,6 @@ export default function DepartmentView() {
             </p>
           </div>
         )}
-
         {!isCombatFinished && combatTurn === 'player' && isInitiator && (
           <div>
             <p className="text-xs font-mono font-bold text-gray-400 mb-2">SELECT SKILL</p>
@@ -1831,7 +1784,6 @@ export default function DepartmentView() {
             </button>
           </div>
         )}
-
         {!isCombatFinished && combatTurn === 'resolve' && isInitiator && (
           <button
             onClick={resolveCombat}
@@ -1840,11 +1792,9 @@ export default function DepartmentView() {
             ⏳ RESOLVE
           </button>
         )}
-
         {!isInitiator && !isCombatFinished && (
           <div className="text-center text-gray-400 py-4">⏳ Waiting for {combatInitiator ? players.find(p => p.id === combatInitiator)?.name : 'the initiator'} to act...</div>
         )}
-
         {isCombatFinished && (
           <button
             onClick={() => setView('dashboard')}
@@ -1853,7 +1803,6 @@ export default function DepartmentView() {
             ↩️ BACK TO FACILITY
           </button>
         )}
-
         <div className="border border-gray-700 bg-gray-900/50 p-2 rounded max-h-32 overflow-y-auto">
           <p className="text-xs font-mono font-bold text-gray-400 mb-1">⚔️ COMBAT LOG</p>
           {combatLog.map((line, i) => (
@@ -1880,7 +1829,6 @@ export default function DepartmentView() {
         </h1>
         <span className="text-sm text-gray-400">Manager: {facility.managerId === user?.id ? 'You' : facility.managerId}</span>
       </div>
-
       {view === 'combat' ? renderCombat() : (
         <>
           {view === 'dashboard' && renderDashboard()}
