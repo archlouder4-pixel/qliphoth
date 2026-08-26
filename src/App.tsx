@@ -483,7 +483,7 @@ export default function App() {
       </main>
 
       <footer className="border-t border-gray-800 py-4 text-center text-xs text-gray-600 font-mono tracking-wider">
-        QLIPHOTH: ECLIPSE PROTOCOL — v1.5.0 "CHAOS AWAKENS" — Signed in as {displayName}{user.isAdmin && ' · ADMIN'}
+        QLIPHOTH: ECLIPSE PROTOCOL — v1.5.0 "DIMENSIONS" — Signed in as {displayName}{user.isAdmin && ' · ADMIN'}
       </footer>
 
       {/* ✅ Global Chat – always visible, fixed position */}
