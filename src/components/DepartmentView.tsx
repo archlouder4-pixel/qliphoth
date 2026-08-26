@@ -1,12 +1,13 @@
 // src/components/DepartmentView.tsx
-// Complete UI for department management with all features:
+// Complete UI for department management with:
 // - Meltdown meter & timer
 // - Active ordeals list
 // - Safe room & retry day buttons
 // - Facility logs with detailed types
 // - Panic indicators
 // - WebSocket sync for co-op
-// - Full deploy, work, research, missions, bullets, memory, and combat views
+// - Research auto-unlock when all department missions complete
+// - Per-department missions with pagination
 
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
@@ -36,6 +37,109 @@ import { getDisplayName } from '../auth/discord';
 import GlobalChat from '../components/GlobalChat';
 import { getDeployCost } from '../store/gameStore';
 import { OrdealInstance, FacilityLogEntry } from '../types';
+
+// ─── SUPPRESSION MISSIONS (from gameStore, but defined here for self-containment) ───
+const SUPPRESSION_MISSIONS: Record<string, { missions: { id: string; name: string; description: string; requiredProgress: number; stat: string; reward: string }[] }> = {
+  MALKUTH: {
+    missions: [
+      { id: 'malkuth_1', name: 'First Records', description: 'Complete 1 successful work', requiredProgress: 1, stat: 'worksCompleted', reward: 'Unlocks Basic Research & Core Suppression' },
+      { id: 'malkuth_2', name: 'Data Entry', description: 'Complete 5 successful works', requiredProgress: 5, stat: 'worksCompleted', reward: 'Unlocks Intermediate Research' },
+      { id: 'malkuth_3', name: 'Record Keeper', description: 'Complete 15 successful works', requiredProgress: 15, stat: 'worksCompleted', reward: 'Unlocks Advanced Research' },
+      { id: 'malkuth_4', name: 'Archivist', description: 'Complete 30 successful works', requiredProgress: 30, stat: 'worksCompleted', reward: 'Unlocks Expert Research' },
+      { id: 'malkuth_5', name: 'Master Archivist', description: 'Complete 50 successful works', requiredProgress: 50, stat: 'worksCompleted', reward: 'Unlocks MALKUTH Core Suppression' },
+    ],
+  },
+  YESOD: {
+    missions: [
+      { id: 'yesod_1', name: 'Information Gatherer', description: 'Complete 2 successful works', requiredProgress: 2, stat: 'worksCompleted', reward: 'Unlocks Basic Research' },
+      { id: 'yesod_2', name: 'Data Analyst', description: 'Complete 8 successful works', requiredProgress: 8, stat: 'worksCompleted', reward: 'Unlocks Intermediate Research' },
+      { id: 'yesod_3', name: 'Information Specialist', description: 'Complete 20 successful works', requiredProgress: 20, stat: 'worksCompleted', reward: 'Unlocks Advanced Research' },
+      { id: 'yesod_4', name: 'Information Master', description: 'Complete 40 successful works', requiredProgress: 40, stat: 'worksCompleted', reward: 'Unlocks Expert Research' },
+      { id: 'yesod_5', name: 'Omniscient', description: 'Complete 75 successful works', requiredProgress: 75, stat: 'worksCompleted', reward: 'Unlocks YESOD Core Suppression' },
+    ],
+  },
+  NETZACH: {
+    missions: [
+      { id: 'netzach_1', name: 'Art Apprentice', description: 'Heal 50 total HP', requiredProgress: 50, stat: 'totalHealing', reward: 'Unlocks Basic Research' },
+      { id: 'netzach_2', name: 'Art Enthusiast', description: 'Heal 150 total HP', requiredProgress: 150, stat: 'totalHealing', reward: 'Unlocks Intermediate Research' },
+      { id: 'netzach_3', name: 'Art Connoisseur', description: 'Heal 300 total HP', requiredProgress: 300, stat: 'totalHealing', reward: 'Unlocks Advanced Research' },
+      { id: 'netzach_4', name: 'Art Master', description: 'Heal 500 total HP', requiredProgress: 500, stat: 'totalHealing', reward: 'Unlocks Expert Research' },
+      { id: 'netzach_5', name: 'Art God', description: 'Heal 1000 total HP', requiredProgress: 1000, stat: 'totalHealing', reward: 'Unlocks NETZACH Core Suppression' },
+    ],
+  },
+  HOD: {
+    missions: [
+      { id: 'hod_1', name: 'Student', description: 'Gain 10 total stat points', requiredProgress: 10, stat: 'statGains', reward: 'Unlocks Basic Research' },
+      { id: 'hod_2', name: 'Scholar', description: 'Gain 25 total stat points', requiredProgress: 25, stat: 'statGains', reward: 'Unlocks Intermediate Research' },
+      { id: 'hod_3', name: 'Teacher', description: 'Gain 50 total stat points', requiredProgress: 50, stat: 'statGains', reward: 'Unlocks Advanced Research' },
+      { id: 'hod_4', name: 'Professor', description: 'Gain 100 total stat points', requiredProgress: 100, stat: 'statGains', reward: 'Unlocks Expert Research' },
+      { id: 'hod_5', name: 'Headmaster', description: 'Gain 200 total stat points', requiredProgress: 200, stat: 'statGains', reward: 'Unlocks HOD Core Suppression' },
+    ],
+  },
+  TIPHERETH: {
+    missions: [
+      { id: 'tiphereth_1', name: 'Energy Novice', description: 'Collect 50 total Energy', requiredProgress: 50, stat: 'totalEnergy', reward: 'Unlocks Basic Research' },
+      { id: 'tiphereth_2', name: 'Energy Apprentice', description: 'Collect 150 total Energy', requiredProgress: 150, stat: 'totalEnergy', reward: 'Unlocks Intermediate Research' },
+      { id: 'tiphereth_3', name: 'Energy Expert', description: 'Collect 350 total Energy', requiredProgress: 350, stat: 'totalEnergy', reward: 'Unlocks Advanced Research' },
+      { id: 'tiphereth_4', name: 'Energy Master', description: 'Collect 600 total Energy', requiredProgress: 600, stat: 'totalEnergy', reward: 'Unlocks Expert Research' },
+      { id: 'tiphereth_5', name: 'Energy God', description: 'Collect 1000 total Energy', requiredProgress: 1000, stat: 'totalEnergy', reward: 'Unlocks TIPHERETH Core Suppression' },
+    ],
+  },
+  GEBURA: {
+    missions: [
+      { id: 'gebura_1', name: 'Novice Fighter', description: 'Deal 100 total damage in combat', requiredProgress: 100, stat: 'totalDamage', reward: 'Unlocks Basic Research' },
+      { id: 'gebura_2', name: 'Skilled Warrior', description: 'Deal 300 total damage in combat', requiredProgress: 300, stat: 'totalDamage', reward: 'Unlocks Intermediate Research' },
+      { id: 'gebura_3', name: 'Elite Soldier', description: 'Deal 600 total damage in combat', requiredProgress: 600, stat: 'totalDamage', reward: 'Unlocks Advanced Research' },
+      { id: 'gebura_4', name: 'Master Fighter', description: 'Deal 1000 total damage in combat', requiredProgress: 1000, stat: 'totalDamage', reward: 'Unlocks Expert Research' },
+      { id: 'gebura_5', name: 'One-Woman Army', description: 'Deal 2000 total damage in combat', requiredProgress: 2000, stat: 'totalDamage', reward: 'Unlocks GEBURA Core Suppression' },
+    ],
+  },
+  CHESED: {
+    missions: [
+      { id: 'chesed_1', name: 'Helper', description: 'Suppress 1 abnormality', requiredProgress: 1, stat: 'suppressions', reward: 'Unlocks Basic Research' },
+      { id: 'chesed_2', name: 'Protector', description: 'Suppress 3 abnormalities', requiredProgress: 3, stat: 'suppressions', reward: 'Unlocks Intermediate Research' },
+      { id: 'chesed_3', name: 'Guardian', description: 'Suppress 6 abnormalities', requiredProgress: 6, stat: 'suppressions', reward: 'Unlocks Advanced Research' },
+      { id: 'chesed_4', name: 'Savior', description: 'Suppress 10 abnormalities', requiredProgress: 10, stat: 'suppressions', reward: 'Unlocks Expert Research' },
+      { id: 'chesed_5', name: 'Messiah', description: 'Suppress 20 abnormalities', requiredProgress: 20, stat: 'suppressions', reward: 'Unlocks CHESED Core Suppression' },
+    ],
+  },
+  BINAH: {
+    missions: [
+      { id: 'binah_1', name: 'Extractor', description: 'Extract 1 E.G.O. equipment', requiredProgress: 1, stat: 'extractions', reward: 'Unlocks Basic Research' },
+      { id: 'binah_2', name: 'Collector', description: 'Extract 3 E.G.O. equipment', requiredProgress: 3, stat: 'extractions', reward: 'Unlocks Intermediate Research' },
+      { id: 'binah_3', name: 'Hoarder', description: 'Extract 6 E.G.O. equipment', requiredProgress: 6, stat: 'extractions', reward: 'Unlocks Advanced Research' },
+      { id: 'binah_4', name: 'Curator', description: 'Extract 10 E.G.O. equipment', requiredProgress: 10, stat: 'extractions', reward: 'Unlocks Expert Research' },
+      { id: 'binah_5', name: 'Singularity Master', description: 'Extract 20 E.G.O. equipment', requiredProgress: 20, stat: 'extractions', reward: 'Unlocks BINAH Core Suppression' },
+    ],
+  },
+  HOKMA: {
+    missions: [
+      { id: 'hokma_1', name: 'Day 10', description: 'Reach Day 10', requiredProgress: 10, stat: 'currentDay', reward: 'Unlocks Basic Research' },
+      { id: 'hokma_2', name: 'Day 20', description: 'Reach Day 20', requiredProgress: 20, stat: 'currentDay', reward: 'Unlocks Intermediate Research' },
+      { id: 'hokma_3', name: 'Day 30', description: 'Reach Day 30', requiredProgress: 30, stat: 'currentDay', reward: 'Unlocks Advanced Research' },
+      { id: 'hokma_4', name: 'Day 40', description: 'Reach Day 40', requiredProgress: 40, stat: 'currentDay', reward: 'Unlocks Expert Research' },
+      { id: 'hokma_5', name: 'Day 50', description: 'Reach Day 50', requiredProgress: 50, stat: 'currentDay', reward: 'Unlocks HOKMA Core Suppression' },
+    ],
+  },
+  DAAT: {
+    missions: [
+      { id: 'daat_1', name: 'Ordeal Survivor', description: 'Complete 2 ordeals', requiredProgress: 2, stat: 'ordealsCompleted', reward: 'Unlocks Basic Research' },
+      { id: 'daat_2', name: 'Ordeal Veteran', description: 'Complete 5 ordeals', requiredProgress: 5, stat: 'ordealsCompleted', reward: 'Unlocks Intermediate Research' },
+      { id: 'daat_3', name: 'Ordeal Master', description: 'Complete 10 ordeals', requiredProgress: 10, stat: 'ordealsCompleted', reward: 'Unlocks Advanced Research' },
+      { id: 'daat_4', name: 'Ordeal Conqueror', description: 'Complete 15 ordeals', requiredProgress: 15, stat: 'ordealsCompleted', reward: 'Unlocks Expert Research' },
+      { id: 'daat_5', name: 'Ordeal God', description: 'Complete 25 ordeals', requiredProgress: 25, stat: 'ordealsCompleted', reward: 'Unlocks DAAT Core Suppression' },
+    ],
+  },
+  KETER: {
+    missions: [
+      { id: 'keter_1', name: 'First Suppression', description: 'Complete 1 core suppression', requiredProgress: 1, stat: 'completedSuppressions', reward: 'Unlocks Basic Research' },
+      { id: 'keter_2', name: 'Growing Power', description: 'Complete 3 core suppressions', requiredProgress: 3, stat: 'completedSuppressions', reward: 'Unlocks Intermediate Research' },
+      { id: 'keter_3', name: 'Established Authority', description: 'Complete 6 core suppressions', requiredProgress: 6, stat: 'completedSuppressions', reward: 'Unlocks Advanced Research' },
+      { id: 'keter_4', name: 'Supreme Ruler', description: 'Complete 9 core suppressions', requiredProgress: 9, stat: 'completedSuppressions', reward: 'Unlocks Expert Research' },
+      { id: 'keter_5', name: 'The One Who Rules', description: 'Complete all other core suppressions', requiredProgress: 10, stat: 'completedSuppressions', reward: 'Unlocks KETER Core Suppression' },
+    ],
+  },
+};
 
 // ─── Constants ──────────────────────────────────────────────────────────
 const MAX_CLASH_POWER = 50;
@@ -1343,11 +1447,15 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Research ─────────────────────────────────────────────
+  // ─── Render: Research (with auto-unlock when missions complete) ──
   const renderResearch = () => {
     const deptKey = facility.departmentKey;
     const dept = DEPARTMENTS.find(d => d.key === deptKey);
     const researches = dept?.research || [];
+
+    // ── Check if all missions for this department are completed ──
+    const deptMissions = SUPPRESSION_MISSIONS[deptKey || '']?.missions || [];
+    const allMissionsDone = deptMissions.every(m => facility.completedMissions.includes(m.id));
 
     return (
       <div className="border border-gray-700 rounded p-4">
@@ -1355,9 +1463,15 @@ export default function DepartmentView() {
           <h3 className="text-lg font-bold text-purple-400">🔬 Research</h3>
           <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
+        {allMissionsDone && (
+          <div className="mb-3 p-2 bg-green-500/10 border border-green-500/30 rounded text-green-400 text-sm">
+            ✅ All department missions completed – all research is automatically unlocked!
+          </div>
+        )}
         <div className="space-y-2">
           {researches.map(r => {
-            const unlocked = facility.unlockedResearch.includes(r.id);
+            // Unlocked if either explicitly unlocked OR all missions done
+            const unlocked = facility.unlockedResearch.includes(r.id) || allMissionsDone;
             return (
               <div key={r.id} className="border border-gray-700 bg-gray-800/30 p-3 rounded flex items-center justify-between">
                 <div>
@@ -1379,9 +1493,13 @@ export default function DepartmentView() {
                     }
                   }}
                   disabled={unlocked}
-                  className={`px-3 py-1 rounded text-sm ${unlocked ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-purple-500/20 border border-purple-400 text-purple-400 hover:bg-purple-400 hover:text-gray-900 transition'}`}
+                  className={`px-3 py-1 rounded text-sm ${
+                    unlocked
+                      ? 'bg-green-500/20 border border-green-400 text-green-400 cursor-default'
+                      : 'bg-purple-500/20 border border-purple-400 text-purple-400 hover:bg-purple-400 hover:text-gray-900 transition'
+                  }`}
                 >
-                  {unlocked ? 'Unlocked' : 'Unlock'}
+                  {unlocked ? '✅ Unlocked' : 'Unlock'}
                 </button>
               </div>
             );
@@ -1391,14 +1509,19 @@ export default function DepartmentView() {
     );
   };
 
-  // ─── Render: Missions ──────────────────────────────────────────────
+  // ─── Render: Missions (per‑department with pagination) ────────────
   const renderMissions = () => {
-    const missions = [
-      { id: 'm1', name: 'First Work', description: 'Complete 1 successful work', progress: facility.missionProgress?.worksCompleted || 0, required: 1 },
-      { id: 'm2', name: 'Energy Collector', description: 'Collect 50 energy', progress: facility.totalEnergy || 0, required: 50 },
-      { id: 'm3', name: 'Deployer', description: 'Deploy 3 abnormalities', progress: facility.missionProgress?.totalDeployments || 0, required: 3 },
-    ];
+    const [selectedDept, setSelectedDept] = useState<string>(facility.departmentKey || 'MALKUTH');
+    const [missionPage, setMissionPage] = useState(0);
+    const missionsPerPage = 5;
+
+    const allDeptKeys = Object.keys(SUPPRESSION_MISSIONS);
+    const deptMissions = SUPPRESSION_MISSIONS[selectedDept]?.missions || [];
     const completed = facility.completedMissions || [];
+
+    const totalPages = Math.ceil(deptMissions.length / missionsPerPage);
+    const start = missionPage * missionsPerPage;
+    const pageMissions = deptMissions.slice(start, start + missionsPerPage);
 
     return (
       <div className="border border-gray-700 rounded p-4">
@@ -1406,27 +1529,77 @@ export default function DepartmentView() {
           <h3 className="text-lg font-bold text-amber-400">📜 Missions</h3>
           <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
-        <div className="space-y-2">
-          {missions.map(m => {
-            const done = completed.includes(m.id);
-            const pct = Math.min(100, (m.progress / m.required) * 100);
+
+        {/* Department filter */}
+        <div className="mb-4 flex flex-wrap gap-2">
+          {allDeptKeys.map(key => {
+            const dept = DEPARTMENTS.find(d => d.key === key);
             return (
-              <div key={m.id} className={`border p-3 rounded ${done ? 'border-green-500/30 bg-green-500/10' : 'border-gray-700 bg-gray-800/30'}`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-white font-bold">{done ? '✅' : '📋'} {m.name}</p>
-                    <p className="text-xs text-gray-400">{m.description}</p>
-                  </div>
-                  <span className="text-xs text-amber-400">{Math.round(pct)}%</span>
-                </div>
-                <div className="h-1.5 bg-gray-700 rounded mt-1 overflow-hidden">
-                  <div className="h-full bg-amber-400" style={{ width: `${pct}%` }} />
-                </div>
-                <p className="text-xs text-gray-500 mt-0.5">{m.progress}/{m.required}</p>
-              </div>
+              <button
+                key={key}
+                onClick={() => { setSelectedDept(key); setMissionPage(0); }}
+                className={`px-3 py-1 text-sm rounded border transition ${
+                  selectedDept === key
+                    ? 'border-amber-400 bg-amber-400/20 text-amber-400'
+                    : 'border-gray-700 text-gray-400 hover:border-amber-400/50'
+                }`}
+              >
+                {dept?.icon} {dept?.name || key}
+              </button>
             );
           })}
         </div>
+
+        {/* Missions list */}
+        <div className="space-y-2">
+          {pageMissions.length === 0 ? (
+            <p className="text-gray-400 text-sm">No missions for this department.</p>
+          ) : (
+            pageMissions.map(m => {
+              const done = completed.includes(m.id);
+              const progress = facility.missionProgress?.[m.stat] || 0;
+              const pct = Math.min(100, (progress / m.requiredProgress) * 100);
+              return (
+                <div key={m.id} className={`border p-3 rounded ${done ? 'border-green-500/30 bg-green-500/10' : 'border-gray-700 bg-gray-800/30'}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-white font-bold">{done ? '✅' : '📋'} {m.name}</p>
+                      <p className="text-xs text-gray-400">{m.description}</p>
+                    </div>
+                    <span className="text-xs text-amber-400">{Math.round(pct)}%</span>
+                  </div>
+                  <div className="h-1.5 bg-gray-700 rounded mt-1 overflow-hidden">
+                    <div className="h-full bg-amber-400" style={{ width: `${pct}%` }} />
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">{progress}/{m.requiredProgress}</p>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Pagination */}
+        {deptMissions.length > missionsPerPage && (
+          <div className="flex justify-between items-center mt-4">
+            <button
+              onClick={() => setMissionPage(prev => Math.max(0, prev - 1))}
+              disabled={missionPage === 0}
+              className="px-3 py-1 border border-gray-600 text-gray-400 rounded hover:border-amber-400 hover:text-amber-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              ← Previous
+            </button>
+            <span className="text-xs text-gray-400">
+              Page {missionPage + 1} of {totalPages}
+            </span>
+            <button
+              onClick={() => setMissionPage(prev => Math.min(totalPages - 1, prev + 1))}
+              disabled={missionPage >= totalPages - 1}
+              className="px-3 py-1 border border-gray-600 text-gray-400 rounded hover:border-amber-400 hover:text-amber-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next →
+            </button>
+          </div>
+        )}
       </div>
     );
   };
