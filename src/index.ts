@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import { DepartmentRoom } from './durableObjects/DepartmentRoom';
 import { ReceptionRoom } from './durableObjects/ReceptionRoom';
 import { CompetitiveRoom } from './durableObjects/CompetitiveRoom';
@@ -15,26 +14,38 @@ type Env = {
   EXPLORATION_ROOM: DurableObjectNamespace;
   GLOBAL_CHAT: DurableObjectNamespace;
   DB: D1Database;
-  ALLOWED_ORIGIN?: string;
+  ALLOWED_ORIGINS?: string; // comma-separated list, e.g. "https://qliphoth.pages.dev,https://beta.qliphoth.pages.dev"
 };
 
 const app = new Hono<{ Bindings: Env }>();
 
 // ─── CORS Middleware ──────────────────────────────────────────────
 app.use('*', async (c, next) => {
+  const allowedOrigins = (c.env.ALLOWED_ORIGINS || 'https://qliphoth.pages.dev')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  const requestOrigin = c.req.header('Origin') || '';
+  const allowOrigin = allowedOrigins.includes(requestOrigin) ? requestOrigin : allowedOrigins[0];
+
   // Handle preflight OPTIONS requests
   if (c.req.method === 'OPTIONS') {
-    c.header('Access-Control-Allow-Origin', c.env.ALLOWED_ORIGIN || '*');
+    c.header('Access-Control-Allow-Origin', allowOrigin);
     c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     c.header('Access-Control-Max-Age', '86400');
+    c.header('Vary', 'Origin');
     return c.body(null, 204);
   }
+
   await next();
+
   // Add CORS headers to all responses
-  c.header('Access-Control-Allow-Origin', c.env.ALLOWED_ORIGIN || '*');
+  c.header('Access-Control-Allow-Origin', allowOrigin);
   c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  c.header('Vary', 'Origin');
 });
 
 // ─── Room endpoints ────────────────────────────────────────────
