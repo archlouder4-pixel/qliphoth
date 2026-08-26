@@ -4,7 +4,7 @@ compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-ALLOWED_ORIGIN = "https://qliphoth.pages.dev"
+ALLOWED_ORIGINS = "https://qliphoth.pages.dev,https://beta.qliphoth.pages.dev"
 
 [[d1_databases]]
 binding = "DB"
