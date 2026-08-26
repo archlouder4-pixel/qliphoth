@@ -61,7 +61,6 @@ export interface DeployedAbno {
   risk: string;
   qliphothCounter: number;
   maxCounter: number;
-  // working stats
   workCount: number;
   lastWorkResult?: 'success' | 'fail';
 }
@@ -126,13 +125,46 @@ export interface OrdealInstance {
   rewardEnergy: number;
 }
 
+export interface OrdealDefinition {
+  id: string;
+  tier: 'Dawn' | 'Noon' | 'Dusk' | 'Midnight';
+  enemyType: 'Crimson' | 'Amber' | 'Green' | 'Indigo' | 'Violet' | 'White';
+  name: string;
+  description: string;
+  wikiReference: string;
+  totalEnemies: number;
+  phases: {
+    id: string;
+    name: string;
+    description: string;
+    duration: number;
+    enemies: OrdealEnemy[];
+    mechanics?: {
+      type: 'spawn' | 'buff' | 'debuff' | 'heal' | 'shield' | 'enrage' | 'explode' | 'burrow' | 'deactivate' | 'upset_abno' | 'corpse_heal';
+      description: string;
+      value?: number;
+      spawnTarget?: string;
+    }[];
+  }[];
+  rewardEnergy: number | 'quota_percent';
+  rewardLunacy?: number;
+  riskLevel: 'TETH' | 'HE' | 'WAW' | 'ALEPH';
+  spawnCountPerDepartment?: boolean;
+  minDay?: number;
+  globalMechanics?: {
+    type: 'time_limit' | 'timer' | 'phase_transition';
+    description: string;
+    value?: number;
+  }[];
+}
+
 // ============================================================================
 // COMBAT STATE
 // ============================================================================
 
 export interface CombatState {
-  enemy: any; // enemy entity (abnormality or ordeal)
-  player: any; // player entity (agent stats)
+  enemy: any;
+  player: any;
   playerHp: number;
   playerMaxHp: number;
   enemyHp: number;
@@ -147,9 +179,9 @@ export interface CombatState {
   } | null;
   log: string[];
   isFinished: boolean;
-  initiator: string | null; // playerId
+  initiator: string | null;
   abnoId: string | null;
-  ordealId?: string; // if fighting an ordeal
+  ordealId?: string;
 }
 
 // ============================================================================
@@ -187,6 +219,9 @@ export interface DepartmentRoomState {
     // ── Ordeals ──
     ordealsCompleted: number;
     activeOrdeal: { name: string; id: string } | null;
+    greatestOrdealTime: 'Dawn' | 'Noon' | 'Dusk' | 'Midnight' | null;
+    ordealsTriggeredToday: string[]; // e.g., ['Dawn', 'Noon']
+    pendingOrdeal: OrdealDefinition | null; // the next ordeal to trigger
 
     // ── Boost ──
     activeBoost: { expiresAt: number } | null;
@@ -224,7 +259,7 @@ export interface DepartmentRoomState {
 
     // ── Safe Room ──
     safeRoomUnlocked: boolean;
-    panicCount: number; // total panic events this day
+    panicCount: number;
 
     // ── Ordeals list ──
     ordeals: OrdealInstance[];
