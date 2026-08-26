@@ -1,4 +1,5 @@
-// src/store/gameStore.ts – Full file with moveset integration, blood lunacy, ticket exchange, and global chat
+// src/store/gameStore.ts – Full file with moveset integration, blood lunacy, ticket exchange, global chat
+// AND updated department system (meltdown, ordeals, safe room, retry day, etc.)
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { identities, storyOnlyIdentities, getClassCategories, type Identity, expForLevel } from '../data/identities';
@@ -24,6 +25,9 @@ import { data as movesetsData } from '../data/movesets';
 
 // ── IMPORT THE SINGLE SOURCE OF TRUTH FOR DEPARTMENTS ────────────────
 import { DEPARTMENTS } from '../data/departments';
+
+// ── NEW: Import types for ordeals and logs ──────────────────────────
+import { OrdealInstance, FacilityLogEntry } from '../types';
 
 export interface Moveset {
   name: string;
@@ -52,7 +56,7 @@ export const TICKET_COSTS = {
   WALKIRKSNACHT: 3000,
 };
 
-const STORE_VERSION = 28;
+const STORE_VERSION = 29; // bumped version for migration
 
 export const TAB_UNLOCK_LEVELS = {
   gacha: 99,
@@ -356,6 +360,9 @@ export interface GameState {
     }[];
   };
 
+  // ==========================================================================
+  // UPDATED DEPARTMENT / FACILITY STATE – includes all new fields
+  // ==========================================================================
   facility: {
     isActive: boolean;
     name: string;
@@ -422,6 +429,17 @@ export interface GameState {
     memoryRepositoryUnlockedDays: number[];
 
     qliphothOverload: Record<string, { workCount: number; penaltyPercent: number }>;
+
+    // ─── NEW FIELDS ────────────────────────────────────────────────
+    qliphothMeter: number;          // progress toward next meltdown
+    qliphothMax: number;            // threshold to trigger meltdown
+    meltdownActive: boolean;
+    meltdownTarget: string | null;  // abnoId
+    meltdownExpiresAt: number | null;
+    ordeals: OrdealInstance[];      // active/pending ordeals
+    safeRoomUnlocked: boolean;
+    panicCount: number;             // total panic events this day
+    log: FacilityLogEntry[];        // detailed facility log
   };
 
   duel: {
@@ -468,9 +486,7 @@ function generateFloatingGuarantee(): number {
 const AWAKENING_CHAPTER_INDEX = 4;
 const AWAKENING_TRIAL_IDS: string[] = [];
 
-// ─── REMOVED: The local DEPARTMENTS array is no longer here.
-// Instead we import it from '../data/departments' above.
-
+// ─── Research & missions (unchanged) ───────────────────────────────────
 const RESEARCH_DATA: Record<string, { id: string; name: string; description: string; cost: number; effect: any }[]> = {
   MALKUTH: [
     { id: 'malkuth_tt2', name: 'TT2 Protocol', description: 'Allows agents to work more efficiently', cost: 100, effect: { workEfficiency: 1.1 } },
@@ -652,6 +668,11 @@ export function getDeployCost(day: number, risk: string): number {
   return 0;
 }
 
+// ─── Helper to calculate Qliphoth max ──────────────────────────────────
+function calculateQliphothMax(day: number): number {
+  return Math.min(12, 5 + Math.floor(day / 5));
+}
+
 // ─── INITIAL STATE ──────────────────────────────────────────────────────
 const INITIAL_STATE: GameState = {
   enkephalin: 175,
@@ -799,6 +820,7 @@ const INITIAL_STATE: GameState = {
       hypertuneLevel: 0,
     })),
   },
+  // ─── UPDATED FACILITY INITIAL STATE ────────────────────────────────
   facility: {
     isActive: false,
     name: '',
@@ -831,6 +853,16 @@ const INITIAL_STATE: GameState = {
     memoryRepositoryAvailable: false,
     memoryRepositoryUnlockedDays: [],
     qliphothOverload: {},
+    // ─── NEW FIELDS ──────────────────────────────────────────────────
+    qliphothMeter: 0,
+    qliphothMax: calculateQliphothMax(1),
+    meltdownActive: false,
+    meltdownTarget: null,
+    meltdownExpiresAt: null,
+    ordeals: [],
+    safeRoomUnlocked: false,
+    panicCount: 0,
+    log: [],
   },
   duel: {
     active: false,
@@ -839,20 +871,14 @@ const INITIAL_STATE: GameState = {
     streak: 0,
     history: [],
   },
-
-  // Moveset initial state
   ownedMovesets: [],
   movesetTickets: 0,
   wawMovesetTickets: 0,
   alephMovesetTickets: 0,
   walkirksnachtMovesetTickets: 0,
   movesetShards: {},
-
-  // Blood Lunacy initial state
   bloodLunacy: 0,
   bloodLunacyThreshold: 1000,
-
-  // ── Chat initial state ──────────────────────────────────────────────
   chatMessages: [],
   chatUnread: 0,
   chatOpen: false,
@@ -863,7 +889,7 @@ const useGameStore = create<GameState>()(
     (set, get) => ({
       ...INITIAL_STATE,
 
-      // ── Currency actions ──────────────────────────────────────────────
+      // ── All existing actions (unchanged) ──────────────────────────────
       addEnkephalin: (amount: number) => set((state) => ({ enkephalin: state.enkephalin + amount })),
       addWeaponFragments: (amount: number) => set((state) => ({ weaponFragments: state.weaponFragments + amount })),
       addThreads: (amount: number) => set((state) => ({ threads: state.threads + amount })),
@@ -899,14 +925,12 @@ const useGameStore = create<GameState>()(
       addSyncSerum: (amount: number) => set((state) => ({ syncSerumMats: state.syncSerumMats + amount })),
       addLowTierMats: (amount: number) => set((state) => ({ lowTierMats: state.lowTierMats + amount })),
 
-      // ── Story Allies ──────────────────────────────────────────────────
       addStoryAlly: (identityId: string) => {
         set((s) => ({
           storyAllies: s.storyAllies.includes(identityId) ? s.storyAllies : [...s.storyAllies, identityId],
         }));
       },
 
-      // ── Trial identities ──────────────────────────────────────────────
       addTrialIdentity: (identityId: string, permanent: boolean = true) => {
         set((s) => {
           const newTrials = s.trialIdentities.includes(identityId) ? s.trialIdentities : [...s.trialIdentities, identityId];
@@ -958,7 +982,6 @@ const useGameStore = create<GameState>()(
         };
       },
 
-      // ── Chapter management ────────────────────────────────────────────
       prepareChapter: (chapterIndex: number) => {
         const state = get();
         const chapter = storyChapters[chapterIndex];
@@ -1136,7 +1159,6 @@ const useGameStore = create<GameState>()(
         get().addManagerExp(750);
       },
 
-      // ── Story Nodes ────────────────────────────────────────────────────
       completeNode: (chapterId: string, nodeId: string) => {
         set((state) => ({
           nodeCompletion: {
@@ -1156,7 +1178,6 @@ const useGameStore = create<GameState>()(
         return chapter.nodes.filter(n => !state.isNodeComplete(chapterId, n.id));
       },
 
-      // ── Exchange ────────────────────────────────────────────────────────
       exchangeEnkephalinToEventTickets: (amount: number) => {
         const state = get();
         if (state.enkephalin < amount) return;
@@ -1182,13 +1203,11 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ── Pull History ────────────────────────────────────────────────────
       addPullHistoryEntry: (entry: PullHistoryEntry) =>
         set((state) => ({
           pullHistory: [entry, ...state.pullHistory].slice(0, 500),
         })),
 
-      // ── Gacha ──────────────────────────────────────────────────────────
       pullGacha: (bannerType: BannerType, count: 1 | 10): GachaResult[] => {
         const state = get();
         const cost = count === 10 ? 1750 : 175;
@@ -1311,7 +1330,6 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ── Identities ──────────────────────────────────────────────────────
       claimIdentity: (identityId: string) => {
         const state = get();
         if (state.ownedIdentities.some(o => o.identityId === identityId)) return;
@@ -1490,7 +1508,6 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ── Weapons ────────────────────────────────────────────────────────
       levelUpWeapon: (weaponId: string) => {
         const state = get();
         const weapon = weapons.find(w => w.id === weaponId);
@@ -1515,7 +1532,6 @@ const useGameStore = create<GameState>()(
         }
       },
 
-      // ─── EGO Gifts (15-slot) ──────────────────────────────────────────
       levelUpGift: (slotId: EgoGiftSlot) => {
         const state = get();
         const gift = state.equippedGifts.find(g => g.slot === slotId);
@@ -1638,7 +1654,6 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ─── Gift stats & resistances ─────────────────────────────────────
       getTotalGiftStats: () => {
         const state = get();
         const total = {
@@ -1737,7 +1752,6 @@ const useGameStore = create<GameState>()(
         return activeBonuses;
       },
 
-      // ── Story Progression ──────────────────────────────────────────────
       progressStory: () => {
         const state = get();
         if (state.pendingChapterRewards || state.currentForcedIdentity) {
@@ -1757,12 +1771,7 @@ const useGameStore = create<GameState>()(
 
       setStoryRoster: (roster: string[]) => set({ storyRoster: roster }),
 
-      // ── Daily / Weekly ──────────────────────────────────────────────────
-      ensureDailyWeeklyReset: (week: number) => {
-        // Reset logic is handled by timestamps; we just ensure bonus flags are reset on day/week change.
-        // This is a simplified version – you may want to implement full reset logic.
-        // For now, we rely on the migration to set initial values.
-      },
+      ensureDailyWeeklyReset: (week: number) => { /* existing */ },
 
       claimDailyTask: (taskId: string) => {
         const state = get();
@@ -1810,7 +1819,6 @@ const useGameStore = create<GameState>()(
         get().addManagerExp(200);
       },
 
-      // ── Competitive ─────────────────────────────────────────────────────
       setCRRegion: (region: CRRegion) => {
         const state = get();
         if (state.crRegionLocked) return;
@@ -1893,7 +1901,6 @@ const useGameStore = create<GameState>()(
       },
       recordEnemyDefeats: (count: number) => set((s) => ({ totalEnemyDefeats: s.totalEnemyDefeats + count })),
 
-      // ── Team ────────────────────────────────────────────────────────────
       setTeam: (newTeam: string[]) => {
         const state = get();
         const permanentTrials = state.trialIdentities.filter(id =>
@@ -1911,7 +1918,6 @@ const useGameStore = create<GameState>()(
 
       setLeaderIndex: (index: number) => set({ leaderIndex: index }),
 
-      // ── Shard Shop ──────────────────────────────────────────────────────
       recycleShards: (identityId: string, amount: number) => {
         const state = get();
         const identity = identities.find(i => i.id === identityId);
@@ -1964,7 +1970,6 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ── Admin ────────────────────────────────────────────────────────────
       initializeAdmin: () => {
         set((s) => ({
           managerLevel: 80,
@@ -2029,9 +2034,7 @@ const useGameStore = create<GameState>()(
         }));
         return picked.id;
       },
-      adminGiveRandomSigWeapon: (): string | null => {
-        return null;
-      },
+      adminGiveRandomSigWeapon: (): string | null => { return null; },
       adminMaxAllCharacters: () => {
         const state = get();
         const newOwned = state.ownedIdentities.map(owned => {
@@ -2051,11 +2054,8 @@ const useGameStore = create<GameState>()(
         });
         set({ ownedIdentities: newOwned });
       },
-      resetState: () => {
-        set(INITIAL_STATE);
-      },
+      resetState: () => { set(INITIAL_STATE); },
 
-      // ── Shard Unlock ────────────────────────────────────────────────────
       unlockIdentityWithShards: (identityId: string) => {
         const state = get();
         const identity = identities.find(i => i.id === identityId);
@@ -2094,7 +2094,6 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ── Tutorial ────────────────────────────────────────────────────────
       dismissTutorial: () => set({ pendingTutorialKey: null, currentTutorialStep: null, pendingTutorialSequence: null }),
       startTutorialSequence: (key: string) => {
         const firstStep = getFirstTutorialStep(key);
@@ -2159,7 +2158,7 @@ const useGameStore = create<GameState>()(
         }));
       },
 
-      // ── RESONANCE ACTIONS ────────────────────────────────────────────────
+      // ── RESONANCE ACTIONS (unchanged) ────────────────────────────────────
       setResonanceSlot: (slotIndex: number, type: ResonanceType | null) => {
         const state = get();
         if (slotIndex < 0 || slotIndex >= TOTAL_RESONANCE_SLOTS) return;
@@ -2210,7 +2209,7 @@ const useGameStore = create<GameState>()(
         set((state) => ({ egoManifestEssence: Math.max(0, state.egoManifestEssence - amount) })),
 
       // ────────────────────────────────────────────────────────────────────
-      // ─── DEPARTMENT / FACILITY ACTIONS ────────────────────────────────
+      // ─── DEPARTMENT / FACILITY ACTIONS (UPDATED) ──────────────────────
       // ────────────────────────────────────────────────────────────────────
 
       createFacility: (departmentKey: string, userId: string, name?: string) => {
@@ -2223,7 +2222,7 @@ const useGameStore = create<GameState>()(
 
         const state = get();
 
-        // ✅ Check if the department is unlocked by day advancement
+        // Check if department is unlocked by day advancement
         if (state.facility.currentDay < deptConfig.dayUnlock) {
           return {
             success: false,
@@ -2244,6 +2243,9 @@ const useGameStore = create<GameState>()(
             maxEnergy: 100 + (deptConfig.dayUnlock || 0) * 2,
             members: [userId],
             missionProgress: { worksCompleted: 0, totalDeployments: 0 },
+            // Initialize new fields
+            qliphothMax: calculateQliphothMax(1),
+            safeRoomUnlocked: true, // manager gets safe room
           },
         });
         return { success: true, department: get().facility };
@@ -2385,6 +2387,63 @@ const useGameStore = create<GameState>()(
           newOverload[key].penaltyPercent = Math.round(penalty * 100);
         }
 
+        // ─── Qliphoth Meltdown logic ──────────────────────────────────
+        // Only update if not in coop (server handles it)
+        // But we can still update the meter locally for solo mode.
+        // For simplicity, we'll only update if there's no WebSocket active.
+        // The store doesn't know about WebSocket, so we just update the meter.
+        // The server will override with stateUpdate anyway.
+        let newMeltdown = { ...state.facility };
+        if (isSuccess) {
+          let meter = state.facility.qliphothMeter + 1;
+          let max = state.facility.qliphothMax;
+          let active = state.facility.meltdownActive;
+          let target = state.facility.meltdownTarget;
+          let expiresAt = state.facility.meltdownExpiresAt;
+          if (meter >= max) {
+            if (!active) {
+              // Trigger meltdown locally – but this is better handled by server.
+              // We'll just reset meter and set active flag.
+              active = true;
+              // Pick a random abno as target
+              const eligible = state.facility.deployedAbnos.filter(a => a.qliphothCounter > 0);
+              if (eligible.length > 0) {
+                const picked = eligible[Math.floor(Math.random() * eligible.length)];
+                target = picked.abnoId;
+                expiresAt = Date.now() + 60000 + Math.min(30000, state.facility.currentDay * 1000);
+              }
+              meter = 0;
+            } else {
+              meter = 0;
+            }
+          }
+          // If working on meltdown target, resolve it
+          if (active && target === abnoId) {
+            active = false;
+            target = null;
+            expiresAt = null;
+            meter = 0;
+            // Bonus energy
+            set((s) => ({
+              facility: {
+                ...s.facility,
+                energy: Math.min(s.facility.maxEnergy, s.facility.energy + 20),
+              },
+            }));
+          }
+          set((s) => ({
+            facility: {
+              ...s.facility,
+              qliphothMeter: meter,
+              meltdownActive: active,
+              meltdownTarget: target,
+              meltdownExpiresAt: expiresAt,
+            },
+          }));
+        }
+
+        // ─── End of meltdown logic ────────────────────────────────────
+
         set((s) => ({
           facility: {
             ...s.facility,
@@ -2440,6 +2499,7 @@ const useGameStore = create<GameState>()(
           }
         }
 
+        // Reset meltdown state for new day
         set((s) => ({
           facility: {
             ...s.facility,
@@ -2452,6 +2512,15 @@ const useGameStore = create<GameState>()(
             deployedToday: [],
             qliphothOverload: {},
             activeOrdeal,
+            // Reset meltdown
+            meltdownActive: false,
+            meltdownTarget: null,
+            meltdownExpiresAt: null,
+            qliphothMeter: 0,
+            qliphothMax: calculateQliphothMax(newDay),
+            panicCount: 0,
+            // Keep ordeals that are not resolved? Usually they clear on day advance.
+            ordeals: s.facility.ordeals.filter(o => o.resolved),
           },
         }));
 
@@ -2583,6 +2652,14 @@ const useGameStore = create<GameState>()(
             meltdownProgress: 0,
             meltdownLevel: 0,
             qliphothLevel: 0,
+            // Reset meltdown
+            meltdownActive: false,
+            meltdownTarget: null,
+            meltdownExpiresAt: null,
+            qliphothMeter: 0,
+            qliphothMax: calculateQliphothMax(targetDay),
+            panicCount: 0,
+            ordeals: [],
           },
           lunacy: s.lunacy - 1500,
         }));
@@ -2622,6 +2699,92 @@ const useGameStore = create<GameState>()(
         }));
       },
 
+      // ─── NEW DEPARTMENT ACTIONS ────────────────────────────────────────
+
+      /**
+       * Retry the current day – resets energy, deployments, meltdown, etc.
+       */
+      retryDay: (playerId: string) => {
+        const state = get();
+        if (!state.facility.isActive) return { success: false, reason: 'No active facility' };
+        if (state.facility.managerId !== playerId) {
+          return { success: false, reason: 'Only the manager can retry the day.' };
+        }
+        set((s) => ({
+          facility: {
+            ...s.facility,
+            energy: 0,
+            deployedToday: [],
+            qliphothOverload: {},
+            meltdownActive: false,
+            meltdownTarget: null,
+            meltdownExpiresAt: null,
+            qliphothMeter: 0,
+            qliphothMax: calculateQliphothMax(s.facility.currentDay),
+            panicCount: 0,
+            // Keep deployedAbnos, currentDay, etc.
+          },
+        }));
+        // Add a log entry
+        get().addFacilityLog(`Day ${state.facility.currentDay} retried.`, 'warning', playerId);
+        return { success: true };
+      },
+
+      /**
+       * Enter the safe room (heals over time).
+       */
+      goToSafeRoom: (playerId: string) => {
+        const state = get();
+        if (!state.facility.isActive) return { success: false, reason: 'No active facility' };
+        if (!state.facility.safeRoomUnlocked) {
+          return { success: false, reason: 'Safe room not unlocked.' };
+        }
+        // In solo mode, we can just set a flag; the UI will handle the healing animation.
+        // For co-op, the server will handle it.
+        set((s) => ({
+          // We don't have a per-player flag in the facility; we handle it in the UI component.
+          // This action can just be a placeholder; the UI will send a WebSocket message.
+        }));
+        return { success: true };
+      },
+
+      leaveSafeRoom: (playerId: string) => {
+        // Similar to goToSafeRoom, the UI handles it.
+        return { success: true };
+      },
+
+      /**
+       * Start combat with an ordeal enemy.
+       */
+      startOrdealCombat: (ordealId: string, enemyIndex: number, playerId: string) => {
+        const state = get();
+        const ordeal = state.facility.ordeals.find(o => o.id === ordealId);
+        if (!ordeal) return { success: false, reason: 'Ordeal not found' };
+        if (enemyIndex >= ordeal.enemies.length) return { success: false, reason: 'Invalid enemy index' };
+        // The combat state is managed in the DO; for solo, we can set a local combat state.
+        // We'll need to add a combat field to the store.
+        // For now, we'll just forward to the UI.
+        return { success: true, enemy: ordeal.enemies[enemyIndex] };
+      },
+
+      /**
+       * Add a facility log entry.
+       */
+      addFacilityLog: (message: string, type: 'info' | 'success' | 'warning' | 'danger' | 'panic' | 'death' | 'abno_breach' | 'abno_suppressed' | 'event' | 'event_suppressed' | 'ego_gift' | 'work_start' | 'work_end', player?: string) => {
+        const entry: FacilityLogEntry = {
+          timestamp: Date.now(),
+          message,
+          type,
+          player: player || 'System',
+        };
+        set((s) => ({
+          facility: {
+            ...s.facility,
+            log: [entry, ...(s.facility.log || [])].slice(0, 50),
+          },
+        }));
+      },
+
       // ─── DUEL ACTIONS ────────────────────────────────────────────────────
       startDuel: () => set((state) => ({ duel: { ...state.duel, active: true } })),
       endDuel: () => set((state) => ({ duel: { ...state.duel, active: false } })),
@@ -2639,8 +2802,7 @@ const useGameStore = create<GameState>()(
         else get().addBloodLunacy(10);
       },
 
-      // ─── MOVESET ACTIONS ──────────────────────────────────────────────────
-
+      // ─── MOVESET ACTIONS (unchanged) ──────────────────────────────────
       addMoveset: (name: string) => {
         const state = get();
         const moveset = movesetMap.get(name);
@@ -2800,7 +2962,6 @@ const useGameStore = create<GameState>()(
         return true;
       },
 
-      // ── Blood Lunacy additive ──────────────────────────────────────────
       addBloodLunacy: (amount: number) => {
         set((state) => ({ bloodLunacy: state.bloodLunacy + amount }));
       },
@@ -2815,6 +2976,7 @@ const useGameStore = create<GameState>()(
       markChatRead: () => set({ chatUnread: 0 }),
       toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
       setChatOpen: (open: boolean) => set({ chatOpen: open }),
+
     }),
     {
       name: 'qliphoth_state',
@@ -2822,7 +2984,7 @@ const useGameStore = create<GameState>()(
       migrate: (persistedState: any, version: number) => {
         let newState = { ...persistedState };
 
-        // ─── Ensure facility exists ────────────────────────────────────
+        // ─── Ensure facility exists and has new fields ──────────────────
         if (!newState.facility) {
           newState.facility = { ...INITIAL_STATE.facility };
         } else {
@@ -2831,6 +2993,14 @@ const useGameStore = create<GameState>()(
             if (newState.facility[key] === undefined) {
               newState.facility[key] = defaultFac[key];
             }
+          }
+        }
+
+        // Ensure new fields are present
+        const newFields = ['qliphothMeter', 'qliphothMax', 'meltdownActive', 'meltdownTarget', 'meltdownExpiresAt', 'ordeals', 'safeRoomUnlocked', 'panicCount', 'log'];
+        for (const field of newFields) {
+          if (newState.facility[field] === undefined) {
+            newState.facility[field] = INITIAL_STATE.facility[field];
           }
         }
 
@@ -3111,6 +3281,16 @@ const useGameStore = create<GameState>()(
           weeklyTasks.push({ id: 'weekly_moveset_3', description: 'Obtain 3 Movesets', progress: 0, max: 3, claimed: false });
         }
         state.weeklyTasks = weeklyTasks;
+
+        // ─── Ensure facility has new fields ──────────────────────────
+        if (state.facility) {
+          const newFields = ['qliphothMeter', 'qliphothMax', 'meltdownActive', 'meltdownTarget', 'meltdownExpiresAt', 'ordeals', 'safeRoomUnlocked', 'panicCount', 'log'];
+          for (const field of newFields) {
+            if (state.facility[field] === undefined) {
+              state.facility[field] = INITIAL_STATE.facility[field];
+            }
+          }
+        }
       },
       partialize: (state) => ({
         enkephalin: state.enkephalin,
@@ -3186,17 +3366,14 @@ const useGameStore = create<GameState>()(
         resonance: state.resonance,
         facility: state.facility,
         duel: state.duel,
-        // Moveset fields
         ownedMovesets: state.ownedMovesets,
         movesetTickets: state.movesetTickets,
         wawMovesetTickets: state.wawMovesetTickets,
         alephMovesetTickets: state.alephMovesetTickets,
         walkirksnachtMovesetTickets: state.walkirksnachtMovesetTickets,
         movesetShards: state.movesetShards,
-        // Blood Lunacy
         bloodLunacy: state.bloodLunacy,
         bloodLunacyThreshold: state.bloodLunacyThreshold,
-        // Chat fields
         chatMessages: state.chatMessages,
         chatUnread: state.chatUnread,
         chatOpen: state.chatOpen,
