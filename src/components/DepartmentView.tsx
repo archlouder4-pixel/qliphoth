@@ -7,7 +7,7 @@
 // - Panic indicators
 // - WebSocket sync for co-op
 // - Research auto-unlock when all department missions complete
-// - Per-department missions with pagination
+// - Per-department missions with pagination (fixed useState error)
 
 import React, { useState, useEffect, useRef } from 'react';
 import useGameStore from '../store/gameStore';
@@ -38,7 +38,7 @@ import GlobalChat from '../components/GlobalChat';
 import { getDeployCost } from '../store/gameStore';
 import { OrdealInstance, FacilityLogEntry } from '../types';
 
-// ─── SUPPRESSION MISSIONS (from gameStore, but defined here for self-containment) ───
+// ─── SUPPRESSION MISSIONS ─────────────────────────────────────────────
 const SUPPRESSION_MISSIONS: Record<string, { missions: { id: string; name: string; description: string; requiredProgress: number; stat: string; reward: string }[] }> = {
   MALKUTH: {
     missions: [
@@ -167,8 +167,7 @@ function rollCoin(power: number): number {
 }
 
 function clash(pP: number, eP: number, pC: number, eC: number) {
-  let pt = rollCoin(pP),
-    et = rollCoin(eP);
+  let pt = rollCoin(pP), et = rollCoin(eP);
   for (let i = 1; i < Math.max(pC, eC); i++) {
     if (i < pC) pt += rollCoin(pP);
     if (i < eC) et += rollCoin(eP);
@@ -348,6 +347,10 @@ export default function DepartmentView() {
   const [pendingWorkType, setPendingWorkType] = useState<WorkType | null>(null);
   const [showDisbandConfirm, setShowDisbandConfirm] = useState(false);
   const workTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ─── Missions state (lifted to component level) ──────────────────
+  const [selectedDept, setSelectedDept] = useState<string>(facility.departmentKey || 'MALKUTH');
+  const [missionPage, setMissionPage] = useState(0);
 
   // ─── Combat state ──────────────────────────────────────────────────
   const [combatEnemy, setCombatEnemy] = useState<any>(null);
@@ -1511,17 +1514,13 @@ export default function DepartmentView() {
 
   // ─── Render: Missions (per‑department with pagination) ────────────
   const renderMissions = () => {
-    const [selectedDept, setSelectedDept] = useState<string>(facility.departmentKey || 'MALKUTH');
-    const [missionPage, setMissionPage] = useState(0);
-    const missionsPerPage = 5;
-
     const allDeptKeys = Object.keys(SUPPRESSION_MISSIONS);
     const deptMissions = SUPPRESSION_MISSIONS[selectedDept]?.missions || [];
     const completed = facility.completedMissions || [];
 
-    const totalPages = Math.ceil(deptMissions.length / missionsPerPage);
-    const start = missionPage * missionsPerPage;
-    const pageMissions = deptMissions.slice(start, start + missionsPerPage);
+    const totalPages = Math.ceil(deptMissions.length / 5);
+    const start = missionPage * 5;
+    const pageMissions = deptMissions.slice(start, start + 5);
 
     return (
       <div className="border border-gray-700 rounded p-4">
@@ -1579,7 +1578,7 @@ export default function DepartmentView() {
         </div>
 
         {/* Pagination */}
-        {deptMissions.length > missionsPerPage && (
+        {deptMissions.length > 5 && (
           <div className="flex justify-between items-center mt-4">
             <button
               onClick={() => setMissionPage(prev => Math.max(0, prev - 1))}
