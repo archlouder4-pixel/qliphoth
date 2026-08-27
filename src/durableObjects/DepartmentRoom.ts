@@ -1072,11 +1072,34 @@ export class DepartmentRoom extends DurableObject {
       ws.send(JSON.stringify({ type: 'error', message: 'Only the manager can disband the facility' }));
       return;
     }
+
+    // Clean up any timers referencing the old (about-to-be-replaced) state
+    // before resetting, so nothing fires against stale/orphaned objects.
+    if (this.meltdownTimer) {
+      clearTimeout(this.meltdownTimer);
+      this.meltdownTimer = null;
+    }
+    for (const timer of this.panicTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.panicTimers.clear();
+
     this.state = this.createDefaultState();
     await this.saveState();
+
+    // Broadcast the standard stateUpdate FIRST so every connected client's
+    // normal state-sync path (the same one used for every other action)
+    // picks up the reset facility/players automatically, not just clients
+    // that specifically special-case "departmentRoomDisbanded".
+    this.broadcastState();
+
     const payload = JSON.stringify({ type: 'departmentRoomDisbanded' });
     for (const socket of this.ctx.getWebSockets()) {
-      socket.send(payload);
+      try {
+        socket.send(payload);
+      } catch (e) {
+        /* ignore */
+      }
     }
   }
 
