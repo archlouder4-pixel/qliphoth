@@ -1,5 +1,6 @@
 // src/store/gameStore.ts – Full file with moveset integration, blood lunacy, ticket exchange, global chat
 // AND updated department system (meltdown, ordeals, safe room, retry day, etc.)
+// PLUS notifications (toasts) for max energy and mission completion
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { identities, storyOnlyIdentities, getClassCategories, type Identity, expForLevel } from '../data/identities';
@@ -38,6 +39,14 @@ export interface Moveset {
   video?: string;
 }
 
+// ─── NEW: Notification interface ──────────────────────────────────────
+export interface Notification {
+  id: string;
+  message: string;
+  type: 'success' | 'info' | 'warning' | 'danger';
+  duration?: number;
+}
+
 const movesets: Moveset[] = (movesetsData || []).map((m: any) => ({
   ...m,
   grade: m.grade || 'standard',
@@ -56,7 +65,7 @@ export const TICKET_COSTS = {
   WALKIRKSNACHT: 3000,
 };
 
-const STORE_VERSION = 29; // bumped version for migration
+const STORE_VERSION = 30; // bumped for notifications
 
 export const TAB_UNLOCK_LEVELS = {
   gacha: 99,
@@ -359,6 +368,9 @@ export interface GameState {
       hypertuneLevel: number;
     }[];
   };
+
+  // ─── Notifications ─────────────────────────────────────────────────
+  notifications: Notification[];
 
   // ==========================================================================
   // UPDATED DEPARTMENT / FACILITY STATE – includes all new fields
@@ -820,6 +832,8 @@ const INITIAL_STATE: GameState = {
       hypertuneLevel: 0,
     })),
   },
+  // ─── Notifications ─────────────────────────────────────────────────
+  notifications: [],
   // ─── UPDATED FACILITY INITIAL STATE ────────────────────────────────
   facility: {
     isActive: false,
@@ -2209,6 +2223,28 @@ const useGameStore = create<GameState>()(
         set((state) => ({ egoManifestEssence: Math.max(0, state.egoManifestEssence - amount) })),
 
       // ────────────────────────────────────────────────────────────────────
+      // ─── NOTIFICATIONS ──────────────────────────────────────────────────
+      // ────────────────────────────────────────────────────────────────────
+      addNotification: (notification) => {
+        const id = Date.now().toString() + Math.random().toString(36).slice(2, 6);
+        const withId = { ...notification, id, duration: notification.duration || 3000 };
+        set((state) => ({
+          notifications: [...state.notifications, withId],
+        }));
+        setTimeout(() => {
+          set((state) => ({
+            notifications: state.notifications.filter(n => n.id !== id),
+          }));
+        }, withId.duration);
+      },
+      removeNotification: (id) => {
+        set((state) => ({
+          notifications: state.notifications.filter(n => n.id !== id),
+        }));
+      },
+      clearNotifications: () => set({ notifications: [] }),
+
+      // ────────────────────────────────────────────────────────────────────
       // ─── DEPARTMENT / FACILITY ACTIONS (UPDATED) ──────────────────────
       // ────────────────────────────────────────────────────────────────────
 
@@ -2363,6 +2399,38 @@ const useGameStore = create<GameState>()(
           newMissionProgress.worksCompleted = (newMissionProgress.worksCompleted || 0) + 1;
         }
         newMissionProgress.totalEnergy = (newMissionProgress.totalEnergy || 0) + energyGain;
+
+        // ─── Notifications ──────────────────────────────────────────
+        // Max energy
+        if (newEnergy >= state.facility.maxEnergy) {
+          get().addNotification({
+            message: '⚡ Maximum Energy reached!',
+            type: 'success',
+          });
+        }
+
+        // Mission completion (only for the 3 basic missions for now)
+        const missionList = [
+          { id: 'm1', required: 1, stat: 'worksCompleted', name: 'First Work' },
+          { id: 'm2', required: 50, stat: 'totalEnergy', name: 'Energy Collector' },
+          { id: 'm3', required: 3, stat: 'totalDeployments', name: 'Deployer' },
+        ];
+        for (const mission of missionList) {
+          const progress = newMissionProgress[mission.stat] || 0;
+          if (progress >= mission.required && !state.facility.completedMissions.includes(mission.id)) {
+            get().addNotification({
+              message: `✅ Mission Complete: ${mission.name}!`,
+              type: 'success',
+            });
+            // Add to completedMissions
+            set((s) => ({
+              facility: {
+                ...s.facility,
+                completedMissions: [...s.facility.completedMissions, mission.id],
+              },
+            }));
+          }
+        }
 
         let boostDropped = false;
         let boostData = null;
@@ -3167,6 +3235,9 @@ const useGameStore = create<GameState>()(
         if (newState.chatUnread === undefined) newState.chatUnread = 0;
         if (newState.chatOpen === undefined) newState.chatOpen = false;
 
+        // ─── Migrate notifications ─────────────────────────────────────
+        if (!newState.notifications) newState.notifications = [];
+
         return newState;
       },
       onRehydrateStorage: () => (state) => {
@@ -3291,6 +3362,9 @@ const useGameStore = create<GameState>()(
             }
           }
         }
+
+        // ─── Ensure notifications exists ─────────────────────────────
+        if (!state.notifications) state.notifications = [];
       },
       partialize: (state) => ({
         enkephalin: state.enkephalin,
@@ -3377,6 +3451,7 @@ const useGameStore = create<GameState>()(
         chatMessages: state.chatMessages,
         chatUnread: state.chatUnread,
         chatOpen: state.chatOpen,
+        notifications: state.notifications,
       }),
     }
   )
