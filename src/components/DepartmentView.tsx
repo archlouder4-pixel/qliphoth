@@ -877,7 +877,9 @@ export default function DepartmentView() {
                 <div className="w-48 h-2 bg-gray-700 rounded overflow-hidden">
                   <div className="h-full bg-amber-400 transition-all duration-300" style={{ width: `${(facility.qliphothMeter / facility.qliphothMax) * 100}%` }} />
                 </div>
-                <span className="text-xs text-gray-400 font-mono">{facility.qliphothMeter}/{facility.qliphothMax}</span>
+                <span className="text-xs text-gray-400 font-mono">
+  {Math.round((facility.qliphothMeter / facility.qliphothMax) * 100)}%
+</span>
               </div>
             </div>
             {facility.meltdownActive && (
