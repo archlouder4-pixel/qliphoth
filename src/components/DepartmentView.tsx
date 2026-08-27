@@ -1433,48 +1433,30 @@ export default function DepartmentView() {
           <h3 className="text-lg font-bold text-purple-400 font-mono tracking-wider uppercase">🔬 Research</h3>
           <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-white">← Back</button>
         </div>
-        {allMissionsDone && (
-          <div className="mb-3 p-2 bg-green-500/10 border border-green-500/30 rounded text-green-400 text-sm">
-            ✅ All department missions completed – all research is automatically unlocked!
+        {allMissionsDone ? (
+          <>
+            <div className="mb-3 p-2 bg-green-500/10 border border-green-500/30 rounded text-green-400 text-sm">
+              ✅ All department missions completed – research unlocked!
+            </div>
+            <div className="space-y-2">
+              {researches.map(r => (
+                <div key={r.id} className="border border-green-500/30 bg-green-500/5 p-3 rounded flex items-center justify-between">
+                  <div>
+                    <p className="text-white font-bold">{r.name}</p>
+                    <p className="text-xs text-gray-400">{r.description}</p>
+                  </div>
+                  <span className="px-3 py-1 rounded text-sm bg-green-500/20 border border-green-400 text-green-400">
+                    ✅ Unlocked
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="p-4 border border-gray-700 bg-gray-800/30 rounded text-center text-gray-400 text-sm">
+            🔒 Complete all department missions to unlock research for this department.
           </div>
         )}
-        <div className="space-y-2">
-          {researches.map(r => {
-            // Unlocked if either explicitly unlocked OR all missions done
-            const unlocked = facility.unlockedResearch.includes(r.id) || allMissionsDone;
-            return (
-              <div key={r.id} className="border border-gray-700 bg-gray-800/30 p-3 rounded flex items-center justify-between">
-                <div>
-                  <p className="text-white font-bold">{r.name}</p>
-                  <p className="text-xs text-gray-400">{r.description}</p>
-                  <p className="text-xs text-amber-400">Cost: {r.cost.lunacy}🌟 / {r.cost.energy}⚡</p>
-                </div>
-                <button
-                  onClick={() => {
-                    if (unlocked) return;
-                    if (isCoop) {
-                      sendAction('unlockResearch', { researchId: r.id });
-                    } else {
-                      const result = unlockResearch(r.id);
-                      if (result.success) {
-                        alert(`✅ ${r.name} unlocked!`);
-                        addFacilityLog(`${getDisplayName(user)} researched ${r.name}`, 'success');
-                      } else alert(`❌ ${result.reason}`);
-                    }
-                  }}
-                  disabled={unlocked}
-                  className={`px-3 py-1 rounded text-sm ${
-                    unlocked
-                      ? 'bg-green-500/20 border border-green-400 text-green-400 cursor-default'
-                      : 'bg-purple-500/20 border border-purple-400 text-purple-400 hover:bg-purple-400 hover:text-gray-900 transition'
-                  }`}
-                >
-                  {unlocked ? '✅ Unlocked' : 'Unlock'}
-                </button>
-              </div>
-            );
-          })}
-        </div>
       </div>
     );
   };
@@ -1712,7 +1694,7 @@ export default function DepartmentView() {
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-red-400 font-mono tracking-wider uppercase">⚔️ COMBAT</h3>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400">Initiator: {combatInitiator ? players.find(p => p.id === combatInitiator)?.name || combatInitiator : 'Unknown'}</span>
+            <span className="text-xs text-gray-400">Initiator: {combatInitiator ? (players || []).find(p => p.id === combatInitiator)?.name || combatInitiator : 'Unknown'}</span>
             <button
               onClick={() => {
                 if (isCombatFinished) {
@@ -1793,7 +1775,7 @@ export default function DepartmentView() {
           </button>
         )}
         {!isInitiator && !isCombatFinished && (
-          <div className="text-center text-gray-400 py-4">⏳ Waiting for {combatInitiator ? players.find(p => p.id === combatInitiator)?.name : 'the initiator'} to act...</div>
+          <div className="text-center text-gray-400 py-4">⏳ Waiting for {combatInitiator ? (players || []).find(p => p.id === combatInitiator)?.name : 'the initiator'} to act...</div>
         )}
         {isCombatFinished && (
           <button
