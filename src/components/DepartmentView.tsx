@@ -36,6 +36,7 @@ import { getDisplayName } from '../auth/discord';
 import GlobalChat from '../components/GlobalChat';
 import { getDeployCost } from '../store/gameStore';
 import { OrdealInstance, FacilityLogEntry } from '../types';
+import MeltdownTimer from '../components/MeltdownTimer';
 
 // ─── SUPPRESSION MISSIONS ─────────────────────────────────────────────
 const SUPPRESSION_MISSIONS: Record<string, { missions: { id: string; name: string; description: string; requiredProgress: number; stat: string; reward: string }[] }> = {
